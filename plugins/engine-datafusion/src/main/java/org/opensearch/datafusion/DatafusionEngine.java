@@ -215,6 +215,8 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
 
     @Override
     public void executeQueryPhase(DatafusionContext context) {
+        logger.info("[Profiler] SYNC executeQueryPhase called shard={}", context.indexShard().shardId());
+        long queryStartNanos = System.nanoTime();
         Map<String, List<Object>> finalRes = new HashMap<>();
         List<Long> rowIdResult = new ArrayList<>();
         RecordBatchStream stream = null;
@@ -285,11 +287,15 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
             }
         }
         context.setDFResults(new DfResult(finalRes));
+        long totalMs = (System.nanoTime() - queryStartNanos) / 1_000_000;
+        logger.info("[Profiler] total query latency {}ms shard={}", totalMs, context.indexShard().shardId());
         context.queryResult().topDocs(new TopDocsAndMaxScore(new TopDocs(new TotalHits(rowIdResult.size(), TotalHits.Relation.EQUAL_TO), rowIdResult.stream().map(d-> new ScoreDoc(d.intValue(), Float.NaN, context.indexShard().shardId().getId())).toList().toArray(ScoreDoc[]::new)) , Float.NaN), new DocValueFormat[0]);
     }
 
     @Override
     public void executeQueryPhaseAsync(DatafusionContext context, Executor executor, ActionListener<QueryResult> listener) {
+        logger.info("[Profiler] ASYNC executeQueryPhaseAsync called shard={}", context.indexShard().shardId());
+        long queryStartNanos = System.nanoTime();
         try {
             DatafusionSearcher datafusionSearcher = context.getEngineSearcher();
             context.getDatafusionQuery().setQueryPlanExplainEnabled(context.evaluateSearchQueryExplainMode());
@@ -330,7 +336,7 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
                         }
                     }
                 };
-                loadNextBatch(stream, executor, collector, finalResColumns, allocator, listener, context, rowIdResult);
+                loadNextBatch(stream, executor, collector, finalResColumns, allocator, listener, context, rowIdResult, queryStartNanos);
             });
 
 //            logger.info("Memory Pool Allocation Post Query ShardID:{}", context.getQueryShardContext().getShardId());
@@ -357,7 +363,8 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
         RootAllocator allocator,
         ActionListener<QueryResult> listener,
         DatafusionContext context,
-        List<Long> rowIdResult
+        List<Long> rowIdResult,
+        long queryStartNanos
     ) {
         AsyncRecordBatchIterator iterator = new AsyncRecordBatchIterator(stream);
         iterator.nextAsync(ActionListener.wrap(hasMore -> {
@@ -365,12 +372,14 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
                 try {
                     collector.collect(stream);
                     // Recursively load next batch - TODO : anyway to Change this to iteration ?
-                    loadNextBatch(stream, executor, collector, finalRes, allocator, listener, context, rowIdResult);
+                    loadNextBatch(stream, executor, collector, finalRes, allocator, listener, context, rowIdResult, queryStartNanos);
                 } catch (Exception e) {
                     cleanup(stream, allocator);
                     listener.onFailure(e);
                 }
             } else {
+                long totalMs = (System.nanoTime() - queryStartNanos) / 1_000_000;
+                logger.info("[Profiler] total query latency {}ms shard={}", totalMs, context.indexShard().shardId());
                 cleanup(stream, allocator);
                 context.queryResult().topDocs(new TopDocsAndMaxScore(new TopDocs(new TotalHits(rowIdResult.size(),
                     TotalHits.Relation.EQUAL_TO), rowIdResult.stream().map(d-> new ScoreDoc(d.intValue(),

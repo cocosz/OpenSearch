@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::time::Instant;
 use datafusion::common::stats::Precision;
 use jni::sys::jlong;
 use datafusion::{
@@ -56,6 +57,7 @@ use crate::{CustomFileMeta, FileStats};
 use crate::DataFusionRuntime;
 use crate::project_row_id_analyzer::ProjectRowIdAnalyzer;
 use crate::absolute_row_id_optimizer::{AbsoluteRowIdOptimizer, ROW_BASE_FIELD_NAME, ROW_ID_FIELD_NAME};
+use vectorized_exec_spi::log_info;
 
 /// Executes a query using DataFusion with cross-runtime streaming capabilities.
 /// This function sets up the complete query execution pipeline including table registration,
@@ -113,6 +115,9 @@ pub async fn execute_query_with_cross_rt_stream(
     runtime: &DataFusionRuntime,
     cpu_executor: DedicatedExecutor,
 ) -> Result<jlong, DataFusionError> {
+    log_info!("[Profiler] ENTERED execute_query_with_cross_rt_stream");
+    let query_start = Instant::now();
+
     let object_meta: Arc<Vec<ObjectMeta>> = Arc::new(
         files_meta
             .iter()
@@ -168,6 +173,9 @@ pub async fn execute_query_with_cross_rt_stream(
         // the AbsoluteRowIdOptimizer to convert relative row IDs to absolute ones
         .with_table_partition_cols(vec![(ROW_BASE_FIELD_NAME.to_string(), DataType::Int64)]);
 
+    log_info!("[Profiler] setup took {:?}", query_start.elapsed());
+    let t = Instant::now();
+
     let resolved_schema = match listing_options
         .infer_schema(&ctx.state(), &table_path)
         .await {
@@ -177,6 +185,9 @@ pub async fn execute_query_with_cross_rt_stream(
             return Err(e);
         }
     };
+
+    log_info!("[Profiler] infer_schema took {:?}", t.elapsed());
+    let t = Instant::now();
 
     let table_config = ListingTableConfig::new(table_path.clone())
         .with_listing_options(listing_options)
@@ -194,6 +205,9 @@ pub async fn execute_query_with_cross_rt_stream(
         error!("Failed to register table: {}", e);
         return Err(e);
     }
+
+    log_info!("[Profiler] register_table took {:?}", t.elapsed());
+    let t = Instant::now();
 
     // Decode substrait
     let substrait_plan = match Plan::decode(plan_bytes_vec.as_slice()) {
@@ -222,6 +236,9 @@ pub async fn execute_query_with_cross_rt_stream(
             return Err(e);
         }
     };
+
+    log_info!("[Profiler] substrait took {:?}", t.elapsed());
+    let t = Instant::now();
 
     let is_aggregation_query = is_aggs_query(&logical_plan);
 
@@ -259,7 +276,18 @@ pub async fn execute_query_with_cross_rt_stream(
         }
     };
 
+    log_info!("[Profiler] execute_logical_plan took {:?}", t.elapsed());
+    let t = Instant::now();
+
     let mut physical_plan = dataframe.clone().create_physical_plan().await?;
+
+    log_info!("[Profiler] create_physical_plan took {:?}, output_cols={}", t.elapsed(), physical_plan.schema().fields().len());
+    {
+        let plan_str = format!("{}", datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true));
+        for (i, line) in plan_str.lines().enumerate() {
+            log_info!("[Plan] {}: {}", i, line);
+        }
+    }
 
     // For non-aggregation queries, we need to return absolute row IDs to identify specific rows
     // The AbsoluteRowIdOptimizer works at the physical plan level to transform relative row IDs
@@ -271,6 +299,14 @@ pub async fn execute_query_with_cross_rt_stream(
         // This converts file-relative row IDs to globally unique absolute row IDs
         physical_plan = AbsoluteRowIdOptimizer.optimize(physical_plan, ctx.state().config_options())
             .expect("Failed to optimize physical plan");
+    }
+
+
+    if true {
+        let plan_str = format!("{}", datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true));
+        for (i, line) in plan_str.lines().enumerate() {
+            log_info!("[Plan] {}: {}", i, line);
+        }
     }
 
 
@@ -287,6 +323,8 @@ pub async fn execute_query_with_cross_rt_stream(
             return Err(e);
         }
     };
+
+    log_info!("[Profiler] total query setup took {:?}", query_start.elapsed());
 
     Ok(get_cross_rt_stream(cpu_executor, df_stream))
 }
