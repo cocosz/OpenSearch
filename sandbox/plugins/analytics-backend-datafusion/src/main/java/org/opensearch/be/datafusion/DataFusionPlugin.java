@@ -25,6 +25,7 @@ import org.opensearch.common.settings.IndexScopedSettings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.settings.SettingsFilter;
+import org.opensearch.common.util.FeatureFlags;
 import org.opensearch.core.action.ActionResponse;
 import org.opensearch.core.common.breaker.CircuitBreaker;
 import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
@@ -350,6 +351,11 @@ public class DataFusionPlugin extends Plugin
             .datanodeMultiplier(DatafusionSettings.CONCURRENCY_DATANODE_MULTIPLIER.get(settings))
             .coordinatorMultiplier(DatafusionSettings.CONCURRENCY_COORDINATOR_MULTIPLIER.get(settings))
             .clusterSettings(clusterService.getClusterSettings())
+            .liquidCacheEnabled(FeatureFlags.isEnabled(FeatureFlags.LIQUID_CACHE_EXPERIMENTAL_SETTING))
+            .liquidCacheSize(DatafusionSettings.LIQUID_CACHE_SIZE.get(settings))
+            .liquidCacheMaxDiskBytes(DatafusionSettings.LIQUID_CACHE_MAX_DISK_BYTES.get(settings))
+            .liquidCacheDir(DatafusionSettings.LIQUID_CACHE_DIR.get(settings))
+            .liquidCacheEvictionPolicy(DatafusionSettings.LIQUID_CACHE_EVICTION_POLICY.get(settings))
             .build();
         dataFusionService.start();
         logger.debug("DataFusion plugin initialized — memory pool {}B, spill limit {}B", memoryPoolLimit, spillMemoryLimit);

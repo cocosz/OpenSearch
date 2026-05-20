@@ -63,6 +63,7 @@ public class DataFusionPluginSettingsTests extends OpenSearchTestCase {
     public void testPluginRegistersMemoryPoolLimitSetting() {
         try (DataFusionPlugin plugin = new DataFusionPlugin()) {
             List<Setting<?>> settings = plugin.getSettings();
+            assertEquals(29, settings.size());
             assertTrue(
                 "Plugin must register DATAFUSION_MEMORY_POOL_LIMIT via getSettings()",
                 settings.contains(DataFusionPlugin.DATAFUSION_MEMORY_POOL_LIMIT)
@@ -93,6 +94,7 @@ public class DataFusionPluginSettingsTests extends OpenSearchTestCase {
     public void testGetSettingsReturnsAllIndexedSettings() {
         try (DataFusionPlugin plugin = new DataFusionPlugin()) {
             List<Setting<?>> settings = plugin.getSettings();
+            assertEquals(29, settings.size());
             Set<String> settingKeys = settings.stream().map(Setting::getKey).collect(Collectors.toSet());
 
             assertTrue(settingKeys.contains("datafusion.indexed.batch_size"));
@@ -111,7 +113,7 @@ public class DataFusionPluginSettingsTests extends OpenSearchTestCase {
     public void testGetSettingsReturnsTotalExpectedCount() {
         try (DataFusionPlugin plugin = new DataFusionPlugin()) {
             List<Setting<?>> settings = plugin.getSettings();
-            assertEquals(25, settings.size());
+            assertEquals(30, settings.size());
         } catch (Exception e) {
             throw new AssertionError(e);
         }

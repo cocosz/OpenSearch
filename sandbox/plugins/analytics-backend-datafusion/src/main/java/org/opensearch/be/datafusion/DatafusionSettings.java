@@ -225,6 +225,55 @@ public final class DatafusionSettings {
 
     // ── All settings registered by the plugin ──
 
+    /**
+     * Controls the Liquid Cache max memory size in bytes for byte-level Parquet caching.
+     * Only used when liquid cache is enabled via the experimental feature flag.
+     */
+    public static final Setting<Long> LIQUID_CACHE_SIZE = Setting.longSetting(
+        "datafusion.liquid_cache.size_bytes",
+        1L * 1024 * 1024 * 1024, // 1GB default
+        0L,
+        Setting.Property.NodeScope,
+        Setting.Property.Final
+    );
+
+    /**
+     * Controls the Liquid Cache max disk size in bytes.
+     * Entries evicted from memory are written to disk up to this limit.
+     * Default is unlimited (Long.MAX_VALUE).
+     */
+    public static final Setting<Long> LIQUID_CACHE_MAX_DISK_BYTES = Setting.longSetting(
+        "datafusion.liquid_cache.max_disk_bytes",
+        Long.MAX_VALUE,
+        0L,
+        Setting.Property.NodeScope,
+        Setting.Property.Final
+    );
+
+    /**
+     * Directory for Liquid Cache disk-spilled entries.
+     */
+    public static final Setting<String> LIQUID_CACHE_DIR = Setting.simpleString(
+        "datafusion.liquid_cache.cache_dir",
+        "/tmp/opensearch/liquid_cache",
+        Setting.Property.NodeScope,
+        Setting.Property.Final
+    );
+
+    /**
+     * Liquid Cache eviction policy.
+     * <ul>
+     *   <li>{@code liquid} (default) — Independent FIFO queues per batch type (LiquidPolicy)</li>
+     *   <li>{@code lru} — Standard LRU eviction across all entry types</li>
+     * </ul>
+     */
+    public static final Setting<String> LIQUID_CACHE_EVICTION_POLICY = Setting.simpleString(
+        "datafusion.liquid_cache.eviction_policy",
+        "liquid",
+        Setting.Property.NodeScope,
+        Setting.Property.Final
+    );
+
     public static final List<Setting<?>> ALL_SETTINGS = List.of(
 
         // Runtime settings — memory pool, spill, reduce input mode, and budget tuning
@@ -259,6 +308,12 @@ public final class DatafusionSettings {
         INDEXED_TREE_COLLECTOR_STRATEGY,
         INDEXED_MAX_COLLECTOR_PARALLELISM,
         INDEXED_QUERY_STRATEGY
+
+        // Liquid Cache settings
+        LIQUID_CACHE_SIZE,
+        LIQUID_CACHE_MAX_DISK_BYTES,
+        LIQUID_CACHE_DIR,
+        LIQUID_CACHE_EVICTION_POLICY
     );
 
     // ── Snapshot management ──
