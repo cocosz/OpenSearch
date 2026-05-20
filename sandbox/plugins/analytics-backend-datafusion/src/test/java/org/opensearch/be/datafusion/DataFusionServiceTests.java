@@ -59,7 +59,7 @@ public class DataFusionServiceTests extends OpenSearchTestCase {
     public void testNativeRuntimeHandleCloseIsIdempotent() {
         ensureTokioInit();
         Path spillDir = createTempDir("spill");
-        long ptr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long ptr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "liquid");
         NativeRuntimeHandle handle = new NativeRuntimeHandle(ptr);
 
         assertTrue(handle.isOpen());
@@ -73,7 +73,7 @@ public class DataFusionServiceTests extends OpenSearchTestCase {
     public void testNativeRuntimeHandleGetAfterCloseThrows() {
         ensureTokioInit();
         Path spillDir = createTempDir("spill");
-        long ptr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long ptr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "liquid");
         NativeRuntimeHandle handle = new NativeRuntimeHandle(ptr);
         handle.close();
         expectThrows(IllegalStateException.class, handle::get);
@@ -173,7 +173,7 @@ public class DataFusionServiceTests extends OpenSearchTestCase {
         NativeBridge.createCache(cachePtr, "STATISTICS", 100 * 1024 * 1024, "LRU");
 
         Path spillDir = createTempDir("spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, cachePtr, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, cachePtr, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "liquid");
         assertTrue(runtimePtr != 0);
 
         NativeBridge.closeGlobalRuntime(runtimePtr);

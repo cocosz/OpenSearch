@@ -85,12 +85,26 @@ pub async fn execute_query(
     config.options_mut().execution.parquet.pushdown_filters = query_config.parquet_pushdown_filters;
     config.options_mut().execution.target_partitions = query_config.target_partitions;
     config.options_mut().execution.batch_size = query_config.batch_size;
+    config.options_mut().execution.parquet.schema_force_view_types = false;
+    config.options_mut().execution.parquet.skip_arrow_metadata = false;
+    config.options_mut().execution.parquet.skip_metadata = false;
 
-    let state = SessionStateBuilder::new()
+    let mut state_builder = SessionStateBuilder::new()
         .with_config(config)
         .with_runtime_env(runtime_env)
         .with_default_features()
         .build();
+        .with_runtime_env(Arc::from(runtime_env))
+        .with_default_features();
+
+    if let Some(ref optimizer) = runtime.liquid_cache_optimizer {
+        state_builder = state_builder.with_physical_optimizer_rule(optimizer.clone());
+    }
+    if let Some(ref lineage_opt) = runtime.liquid_cache_lineage_optimizer {
+        state_builder = state_builder.with_optimizer_rule(lineage_opt.clone());
+    }
+
+    let state = state_builder.build();
 
     let ctx = SessionContext::new_with_state(state);
     crate::udf::register_all(&ctx);

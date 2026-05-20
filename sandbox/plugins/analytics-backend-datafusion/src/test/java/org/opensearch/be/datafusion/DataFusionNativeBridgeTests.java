@@ -50,7 +50,12 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
             64 * 1024 * 1024, // 64MB
             0L,
             spillDir.toString(),
-            32 * 1024 * 1024 // 32MB spill
+            32 * 1024 * 1024, // 32MB spill
+            false,
+            0L,
+            Long.MAX_VALUE,
+            "/tmp/opensearch/liquid_cache",
+            "liquid"
         );
         assertTrue("Runtime pointer should be non-zero", runtimePtr != 0);
 
@@ -61,7 +66,7 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
     public void testReaderLifecycle() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "liquid");
 
         // Copy test parquet to a temp dir
         Path dataDir = createTempDir("datafusion-data");
@@ -85,7 +90,7 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
     public void testSessionContextCreationAndTableRegistration() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "liquid");
         NativeRuntimeHandle runtimeHandle = new NativeRuntimeHandle(runtimePtr);
 
         Path dataDir = createTempDir("datafusion-data");
@@ -160,7 +165,7 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
     public void testReaderWithRealNativeStoreHandle() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "liquid");
 
         // Copy test parquet to a temp dir
         Path dataDir = createTempDir("datafusion-data");

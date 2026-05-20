@@ -33,7 +33,7 @@ datafusion-physical-expr = "=53.1.0"
 datafusion-substrait = "=53.1.0"
 
 # Async
-tokio = { version = "=1.51.0", features = ["full"] }
+tokio = { version = "=1.52.3", features = ["full"] }
 tokio-util = "=0.7.18"
 futures = "=0.3.32"
 tokio-stream = "=0.1.18"
@@ -73,6 +73,9 @@ bytes = "=1.11.1"
 criterion = { version = "=0.5.1", features = ["async_tokio"] }
 tokio-metrics = { version = "=0.5.0", features = ["rt"] }
 proptest = "=1.4.0"
+
+# Liquid Cache for byte-level caching
+liquid-cache-datafusion-local = { git = "https://github.com/cocosz/liquid-cache", branch = "liquid-cache-opensearch-integration", package = "liquid-cache-datafusion-local" }
 
 # Internal
 native-bridge-common = { path = "common" }
