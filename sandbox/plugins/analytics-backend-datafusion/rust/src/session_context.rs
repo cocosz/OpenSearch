@@ -138,13 +138,24 @@ pub async unsafe fn create_session_context(
     config.options_mut().execution.parquet.pushdown_filters = query_config.parquet_pushdown_filters;
     config.options_mut().execution.target_partitions = effective_partitions;
     config.options_mut().execution.batch_size = effective_batch_size;
+    config.options_mut().execution.parquet.schema_force_view_types = false;
+    config.options_mut().execution.parquet.skip_arrow_metadata = false;
+    config.options_mut().execution.parquet.skip_metadata = false;
 
-    let state = SessionStateBuilder::new()
+    let mut state_builder = SessionStateBuilder::new()
         .with_config(config)
         .with_runtime_env(Arc::from(runtime_env))
         .with_default_features()
-        .with_physical_optimizer_rules(crate::agg_mode::physical_optimizer_rules_without_combine())
-        .build();
+        .with_physical_optimizer_rules(crate::agg_mode::physical_optimizer_rules_without_combine());
+
+    if let Some(ref optimizer) = runtime.liquid_cache_optimizer {
+        state_builder = state_builder.with_physical_optimizer_rule(optimizer.clone());
+    }
+    if let Some(ref lineage_opt) = runtime.liquid_cache_lineage_optimizer {
+        state_builder = state_builder.with_optimizer_rule(lineage_opt.clone());
+    }
+
+    let state = state_builder.build();
 
     let ctx = SessionContext::new_with_state(state);
     // Register OpenSearch UDFs (parse, item, mvappend, mvfind, mvzip, convert_tz, …)

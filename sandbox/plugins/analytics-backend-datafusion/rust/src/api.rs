@@ -151,6 +151,8 @@ pub struct DataFusionRuntime {
     pub runtime_env: datafusion::execution::runtime_env::RuntimeEnv,
     pub custom_cache_manager: Option<CustomCacheManager>,
     pub(crate) dynamic_limit_handle: DynamicLimitHandle,
+    pub liquid_cache_optimizer: Option<Arc<dyn datafusion::physical_optimizer::PhysicalOptimizerRule + Send + Sync>>,
+    pub liquid_cache_lineage_optimizer: Option<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>>,
 }
 
 impl DataFusionRuntime {
@@ -160,6 +162,8 @@ impl DataFusionRuntime {
             runtime_env,
             custom_cache_manager: None,
             dynamic_limit_handle: handle,
+            liquid_cache_optimizer: None,
+            liquid_cache_lineage_optimizer: None,
         }
     }
 }
@@ -189,6 +193,11 @@ pub fn create_global_runtime(
     cache_manager_ptr: i64,
     spill_dir: &str,
     spill_limit: i64,
+    liquid_cache_enabled: bool,
+    liquid_cache_size: i64,
+    liquid_cache_max_disk_bytes: i64,
+    liquid_cache_dir: &str,
+    liquid_cache_eviction_policy: &str,
 ) -> Result<i64, DataFusionError> {
     if memory_pool_limit < 0 {
         return Err(DataFusionError::Configuration(format!(
@@ -235,7 +244,36 @@ pub fn create_global_runtime(
         .with_cache_manager(cache_manager_config)
         .build()?;
 
-    let runtime = DataFusionRuntime { runtime_env, custom_cache_manager, dynamic_limit_handle };
+    let (final_runtime_env, liquid_optimizer, liquid_lineage_optimizer) = if liquid_cache_enabled {
+        match crate::liquid_cache::LiquidOnlyRuntime::init(
+            liquid_cache_size as u64,
+            liquid_cache_max_disk_bytes as u64,
+            liquid_cache_dir,
+            liquid_cache_eviction_policy,
+        ) {
+            Ok(liquid_runtime) => {
+                let liquid_env = liquid_runtime.runtime_env();
+                (
+                    (*liquid_env).clone(),
+                    Some(liquid_runtime.optimizer()),
+                    Some(liquid_runtime.lineage_optimizer()),
+                )
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    } else {
+        (runtime_env, None, None)
+    };
+
+    let runtime = DataFusionRuntime {
+        runtime_env: final_runtime_env,
+        custom_cache_manager,
+        dynamic_limit_handle,
+        liquid_cache_optimizer: liquid_optimizer,
+        liquid_cache_lineage_optimizer: liquid_lineage_optimizer,
+    };
     Ok(Box::into_raw(Box::new(runtime)) as i64)
 }
 
@@ -714,6 +752,17 @@ pub unsafe fn stream_close(stream_ptr: i64) {
 /// No-op for unknown or already-completed queries.
 pub fn cancel_query(context_id: i64) {
     query_tracker::cancel_query(context_id);
+}
+
+pub unsafe fn clear_liquid_cache(runtime_ptr: i64) {
+    crate::liquid_cache::LiquidOnlyRuntime::reset_cache_if_initialized();
+
+    if runtime_ptr != 0 {
+        let runtime = &*(runtime_ptr as *const DataFusionRuntime);
+        if let Some(ref cache_manager) = runtime.custom_cache_manager {
+            cache_manager.clear_all();
+        }
+    }
 }
 
 /// Converts SQL to Substrait plan bytes (test only).

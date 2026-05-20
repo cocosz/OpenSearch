@@ -91,17 +91,44 @@ pub unsafe extern "C" fn df_create_global_runtime(
     spill_dir_ptr: *const u8,
     spill_dir_len: i64,
     spill_limit: i64,
+    liquid_cache_enabled: i64,
+    liquid_cache_size: i64,
+    liquid_cache_max_disk_bytes: i64,
+    liquid_cache_mode_ptr: *const u8,
+    liquid_cache_mode_len: i64,
+    liquid_cache_eviction_policy_ptr: *const u8,
+    liquid_cache_eviction_policy_len: i64,
 ) -> i64 {
     crate::memory_guard::set_pool_limit_for_guard(memory_pool_limit);
     let spill_dir = str_from_raw(spill_dir_ptr, spill_dir_len)
         .map_err(|e| format!("df_create_global_runtime: {}", e))?;
-    api::create_global_runtime(memory_pool_limit, cache_manager_ptr, spill_dir, spill_limit)
+    let liquid_cache_dir = str_from_raw(liquid_cache_mode_ptr, liquid_cache_mode_len)
+        .map_err(|e| format!("df_create_global_runtime: liquid_cache_dir: {}", e))?;
+    let liquid_cache_eviction_policy = str_from_raw(liquid_cache_eviction_policy_ptr, liquid_cache_eviction_policy_len)
+        .map_err(|e| format!("df_create_global_runtime: liquid_cache_eviction_policy: {}", e))?;
+    api::create_global_runtime(
+        memory_pool_limit,
+        cache_manager_ptr,
+        spill_dir,
+        spill_limit,
+        liquid_cache_enabled != 0,
+        liquid_cache_size,
+        liquid_cache_max_disk_bytes,
+        liquid_cache_dir,
+        liquid_cache_eviction_policy,
+    )
         .map_err(|e| e.to_string())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn df_close_global_runtime(ptr: i64) {
     api::close_global_runtime(ptr);
+}
+
+/// Clears all Liquid Cache entries and DataFusion internal caches.
+#[no_mangle]
+pub unsafe extern "C" fn df_clear_liquid_cache(runtime_ptr: i64) {
+    api::clear_liquid_cache(runtime_ptr);
 }
 
 // ---- Memory pool observability and dynamic limit ----
@@ -279,6 +306,7 @@ pub unsafe extern "C" fn df_stream_next(stream_ptr: i64) -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn df_stream_close(stream_ptr: i64) {
     api::stream_close(stream_ptr);
+    crate::liquid_cache::LiquidOnlyRuntime::log_stats_if_initialized();
 }
 
 #[no_mangle]
