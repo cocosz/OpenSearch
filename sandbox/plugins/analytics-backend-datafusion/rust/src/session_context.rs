@@ -149,10 +149,14 @@ pub async unsafe fn create_session_context(
         .with_physical_optimizer_rules(crate::agg_mode::physical_optimizer_rules_without_combine());
 
     if let Some(ref optimizer) = runtime.liquid_cache_optimizer {
-        state_builder = state_builder.with_physical_optimizer_rule(optimizer.clone());
+        if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
+            state_builder = state_builder.with_physical_optimizer_rule(optimizer.clone());
+        }
     }
     if let Some(ref lineage_opt) = runtime.liquid_cache_lineage_optimizer {
-        state_builder = state_builder.with_optimizer_rule(lineage_opt.clone());
+        if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
+            state_builder = state_builder.with_optimizer_rule(lineage_opt.clone());
+        }
     }
 
     let state = state_builder.build();

@@ -111,7 +111,6 @@ public class DataFusionPluginSettingsTests extends OpenSearchTestCase {
         try (DataFusionPlugin plugin = new DataFusionPlugin()) {
             List<Setting<?>> settings = plugin.getSettings();
             assertEquals(28, settings.size());
-            assertEquals(28, settings.size());
         } catch (Exception e) {
             throw new AssertionError(e);
         }

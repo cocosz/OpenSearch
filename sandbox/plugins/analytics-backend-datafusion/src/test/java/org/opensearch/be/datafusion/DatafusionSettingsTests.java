@@ -70,7 +70,6 @@ public class DatafusionSettingsTests extends OpenSearchTestCase {
 
     public void testAllSettingsContainsAllExpectedSettings() {
         assertEquals(28, DatafusionSettings.ALL_SETTINGS.size());
-        assertEquals(28, DatafusionSettings.ALL_SETTINGS.size());
         assertTrue(DatafusionSettings.ALL_SETTINGS.contains(DatafusionSettings.INDEXED_BATCH_SIZE));
         assertTrue(DatafusionSettings.ALL_SETTINGS.contains(DatafusionSettings.INDEXED_PARQUET_PUSHDOWN_FILTERS));
         assertTrue(DatafusionSettings.ALL_SETTINGS.contains(DatafusionSettings.INDEXED_MIN_SKIP_RUN_DEFAULT));
