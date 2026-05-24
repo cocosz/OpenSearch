@@ -4,6 +4,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{Arc, OnceLock},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use datafusion::{
@@ -28,6 +29,7 @@ pub struct LiquidOnlyRuntime {
     _cache_ref: Box<dyn std::any::Any + Send + Sync>,
     cache_storage: Arc<LiquidCache>,
     cache_dir: PathBuf,
+    enabled: AtomicBool,
 }
 
 static LIQUID_ONLY: OnceLock<Result<LiquidOnlyRuntime, String>> = OnceLock::new();
@@ -98,6 +100,7 @@ impl LiquidOnlyRuntime {
                 _cache_ref: Box::new(liquid_cache_ref),
                 cache_storage,
                 cache_dir,
+                enabled: AtomicBool::new(true),
             })
         });
 
@@ -116,6 +119,22 @@ impl LiquidOnlyRuntime {
 
     pub fn lineage_optimizer(&self) -> Arc<dyn OptimizerRule + Send + Sync> {
         self.lineage_optimizer.clone()
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn set_max_memory_bytes(&self, bytes: usize) {
+        self.cache_storage.budget().set_max_memory_bytes(bytes);
+    }
+
+    pub fn set_max_disk_bytes(&self, bytes: usize) {
+        self.cache_storage.budget().set_max_disk_bytes(bytes);
     }
 
     pub fn log_stats(&self) {
@@ -157,6 +176,31 @@ impl LiquidOnlyRuntime {
     pub fn log_stats_if_initialized() {
         if let Some(Ok(runtime)) = LIQUID_ONLY.get() {
             runtime.log_stats();
+        }
+    }
+
+    pub fn is_enabled_globally() -> bool {
+        LIQUID_ONLY.get()
+            .and_then(|r| r.as_ref().ok())
+            .map(|rt| rt.is_enabled())
+            .unwrap_or(false)
+    }
+
+    pub fn set_enabled_globally(enabled: bool) {
+        if let Some(Ok(runtime)) = LIQUID_ONLY.get() {
+            runtime.set_enabled(enabled);
+        }
+    }
+
+    pub fn set_max_memory_bytes_globally(bytes: usize) {
+        if let Some(Ok(runtime)) = LIQUID_ONLY.get() {
+            runtime.set_max_memory_bytes(bytes);
+        }
+    }
+
+    pub fn set_max_disk_bytes_globally(bytes: usize) {
+        if let Some(Ok(runtime)) = LIQUID_ONLY.get() {
+            runtime.set_max_disk_bytes(bytes);
         }
     }
 

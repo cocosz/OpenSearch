@@ -226,6 +226,18 @@ public final class DatafusionSettings {
     // ── All settings registered by the plugin ──
 
     /**
+     * Dynamically enables or disables Liquid Cache for new queries.
+     * When false, optimizers are not injected and queries bypass the cache.
+     * The cache remains initialized (for fast re-enable) but idle.
+     */
+    public static final Setting<Boolean> LIQUID_CACHE_ENABLED = Setting.boolSetting(
+        "datafusion.liquid_cache.enabled",
+        true,
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
+    /**
      * Controls the Liquid Cache max memory size in bytes for byte-level Parquet caching.
      * Only used when liquid cache is enabled via the experimental feature flag.
      */
@@ -234,7 +246,7 @@ public final class DatafusionSettings {
         1L * 1024 * 1024 * 1024, // 1GB default
         0L,
         Setting.Property.NodeScope,
-        Setting.Property.Final
+        Setting.Property.Dynamic
     );
 
     /**
@@ -247,7 +259,7 @@ public final class DatafusionSettings {
         Long.MAX_VALUE,
         0L,
         Setting.Property.NodeScope,
-        Setting.Property.Final
+        Setting.Property.Dynamic
     );
 
     /**
@@ -310,6 +322,7 @@ public final class DatafusionSettings {
         INDEXED_QUERY_STRATEGY
 
         // Liquid Cache settings
+        LIQUID_CACHE_ENABLED,
         LIQUID_CACHE_SIZE,
         LIQUID_CACHE_MAX_DISK_BYTES,
         LIQUID_CACHE_DIR,

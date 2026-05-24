@@ -111,6 +111,9 @@ public final class NativeBridge {
     private static final MethodHandle CANCEL_QUERY;
     private static final MethodHandle SET_CANCEL_STATS_THRESHOLD_MS;
     private static final MethodHandle CLEAR_LIQUID_CACHE;
+    private static final MethodHandle SET_LIQUID_CACHE_ENABLED;
+    private static final MethodHandle SET_LIQUID_CACHE_MEMORY_LIMIT;
+    private static final MethodHandle SET_LIQUID_CACHE_DISK_LIMIT;
     private static final MethodHandle STATS;
     private static final MethodHandle QUERY_REGISTRY_TOP_N_BY_CURRENT;
     private static final MethodHandle DF_NATIVE_NODE_STATS;
@@ -159,6 +162,21 @@ public final class NativeBridge {
 
         CLEAR_LIQUID_CACHE = linker.downcallHandle(
             lib.find("df_clear_liquid_cache").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        SET_LIQUID_CACHE_ENABLED = linker.downcallHandle(
+            lib.find("df_set_liquid_cache_enabled").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        SET_LIQUID_CACHE_MEMORY_LIMIT = linker.downcallHandle(
+            lib.find("df_set_liquid_cache_memory_limit").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        SET_LIQUID_CACHE_DISK_LIMIT = linker.downcallHandle(
+            lib.find("df_set_liquid_cache_disk_limit").orElseThrow(),
             FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
         );
 
@@ -688,6 +706,21 @@ public final class NativeBridge {
     /** Clears all Liquid Cache entries and DataFusion internal caches. */
     public static void clearLiquidCache(long runtimePtr) {
         NativeCall.invokeVoid(CLEAR_LIQUID_CACHE, runtimePtr);
+    }
+
+    /** Dynamically enable or disable Liquid Cache for new queries. */
+    public static void setLiquidCacheEnabled(boolean enabled) {
+        NativeCall.invokeVoid(SET_LIQUID_CACHE_ENABLED, enabled ? 1L : 0L);
+    }
+
+    /** Dynamically update the Liquid Cache memory limit in bytes. */
+    public static void setLiquidCacheMemoryLimit(long bytes) {
+        NativeCall.invokeVoid(SET_LIQUID_CACHE_MEMORY_LIMIT, bytes);
+    }
+
+    /** Dynamically update the Liquid Cache disk limit in bytes. */
+    public static void setLiquidCacheDiskLimit(long bytes) {
+        NativeCall.invokeVoid(SET_LIQUID_CACHE_DISK_LIMIT, bytes);
     }
 
     // ---- Memory pool observability and dynamic limit ----
