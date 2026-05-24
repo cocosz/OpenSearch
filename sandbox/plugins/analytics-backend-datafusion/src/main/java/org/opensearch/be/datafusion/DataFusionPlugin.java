@@ -369,6 +369,14 @@ public class DataFusionPlugin extends Plugin
             DATAFUSION_MEMORY_GUARD_EXECUTION_CRITICAL_THRESHOLD.get(settings)
         );
 
+        // Wire Liquid Cache dynamic settings
+        clusterService.getClusterSettings().addSettingsUpdateConsumer(DatafusionSettings.LIQUID_CACHE_ENABLED,
+            enabled -> NativeBridge.setLiquidCacheEnabled(enabled));
+        clusterService.getClusterSettings().addSettingsUpdateConsumer(DatafusionSettings.LIQUID_CACHE_SIZE,
+            bytes -> NativeBridge.setLiquidCacheMemoryLimit(bytes));
+        clusterService.getClusterSettings().addSettingsUpdateConsumer(DatafusionSettings.LIQUID_CACHE_MAX_DISK_BYTES,
+            bytes -> NativeBridge.setLiquidCacheDiskLimit(bytes));
+
         this.datafusionSettings = new DatafusionSettings(clusterService);
 
         // Expose per-task native-memory usage to search backpressure. The tracker calls

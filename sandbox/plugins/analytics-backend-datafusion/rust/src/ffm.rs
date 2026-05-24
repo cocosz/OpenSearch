@@ -131,6 +131,25 @@ pub unsafe extern "C" fn df_clear_liquid_cache(runtime_ptr: i64) {
     api::clear_liquid_cache(runtime_ptr);
 }
 
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_enabled(enabled: i64) {
+    crate::liquid_cache::LiquidOnlyRuntime::set_enabled_globally(enabled != 0);
+}
+
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_memory_limit(bytes: i64) {
+    if bytes >= 0 {
+        crate::liquid_cache::LiquidOnlyRuntime::set_max_memory_bytes_globally(bytes as usize);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_disk_limit(bytes: i64) {
+    if bytes >= 0 {
+        crate::liquid_cache::LiquidOnlyRuntime::set_max_disk_bytes_globally(bytes as usize);
+    }
+}
+
 // ---- Memory pool observability and dynamic limit ----
 
 /// Returns current memory pool usage in bytes.
