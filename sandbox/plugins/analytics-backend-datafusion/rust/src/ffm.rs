@@ -116,6 +116,7 @@ pub unsafe extern "C" fn df_create_global_runtime(
         liquid_cache_max_disk_bytes,
         liquid_cache_dir,
         liquid_cache_eviction_policy,
+        get_rt_manager()?.io_runtime.handle(),
     )
         .map_err(|e| e.to_string())
 }
