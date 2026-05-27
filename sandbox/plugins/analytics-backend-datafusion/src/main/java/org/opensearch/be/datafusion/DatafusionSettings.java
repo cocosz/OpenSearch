@@ -281,7 +281,7 @@ public final class DatafusionSettings {
      */
     public static final Setting<String> LIQUID_CACHE_EVICTION_POLICY = Setting.simpleString(
         "datafusion.liquid_cache.eviction_policy",
-        "liquid",
+        "lru",
         Setting.Property.NodeScope,
         Setting.Property.Final
     );

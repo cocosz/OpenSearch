@@ -302,6 +302,7 @@ pub fn create_global_runtime(
     liquid_cache_max_disk_bytes: i64,
     liquid_cache_dir: &str,
     liquid_cache_eviction_policy: &str,
+    tokio_handle: &tokio::runtime::Handle,
 ) -> Result<i64, DataFusionError> {
     if memory_pool_limit < 0 {
         return Err(DataFusionError::Configuration(format!(
@@ -348,31 +349,25 @@ pub fn create_global_runtime(
         .with_cache_manager(cache_manager_config)
         .build()?;
 
-    let (final_runtime_env, liquid_optimizer, liquid_lineage_optimizer) = if liquid_cache_enabled {
+    let (liquid_optimizer, liquid_lineage_optimizer) = if liquid_cache_enabled {
         match crate::liquid_cache::LiquidOnlyRuntime::init(
             liquid_cache_size as u64,
             liquid_cache_max_disk_bytes as u64,
             liquid_cache_dir,
             liquid_cache_eviction_policy,
+            tokio_handle,
         ) {
-            Ok(liquid_runtime) => {
-                let liquid_env = liquid_runtime.runtime_env();
-                (
-                    (*liquid_env).clone(),
-                    Some(liquid_runtime.optimizer()),
-                    Some(liquid_runtime.lineage_optimizer()),
-                )
-            }
+            Ok(liquid_runtime) => (Some(liquid_runtime.optimizer()), Some(liquid_runtime.lineage_optimizer())),
             Err(e) => {
                 return Err(e);
             }
         }
     } else {
-        (runtime_env, None, None)
+        (None, None)
     };
 
     let runtime = DataFusionRuntime {
-        runtime_env: final_runtime_env,
+        runtime_env,
         custom_cache_manager,
         dynamic_limit_handle,
         liquid_cache_optimizer: liquid_optimizer,

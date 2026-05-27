@@ -85,9 +85,11 @@ pub async fn execute_query(
     config.options_mut().execution.parquet.pushdown_filters = query_config.parquet_pushdown_filters;
     config.options_mut().execution.target_partitions = query_config.target_partitions;
     config.options_mut().execution.batch_size = query_config.batch_size;
-    config.options_mut().execution.parquet.schema_force_view_types = false;
-    config.options_mut().execution.parquet.skip_arrow_metadata = false;
-    config.options_mut().execution.parquet.skip_metadata = false;
+    if runtime.liquid_cache_optimizer.is_some() {
+        config.options_mut().execution.parquet.schema_force_view_types = false;
+        config.options_mut().execution.parquet.skip_arrow_metadata = false;
+        config.options_mut().execution.parquet.skip_metadata = false;
+    }
 
     let mut state_builder = SessionStateBuilder::new()
         .with_config(config)

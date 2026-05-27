@@ -66,7 +66,7 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
     public void testReaderLifecycle() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "liquid");
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "lru");
 
         // Copy test parquet to a temp dir
         Path dataDir = createTempDir("datafusion-data");
@@ -90,7 +90,7 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
     public void testSessionContextCreationAndTableRegistration() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "liquid");
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "lru");
         NativeRuntimeHandle runtimeHandle = new NativeRuntimeHandle(runtimePtr);
 
         Path dataDir = createTempDir("datafusion-data");
@@ -165,7 +165,7 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
     public void testReaderWithRealNativeStoreHandle() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "liquid");
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "lru");
 
         // Copy test parquet to a temp dir
         Path dataDir = createTempDir("datafusion-data");

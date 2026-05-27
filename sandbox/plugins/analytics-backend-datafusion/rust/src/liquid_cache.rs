@@ -9,7 +9,6 @@ use std::{
 
 use datafusion::{
     common::DataFusionError,
-    execution::runtime_env::RuntimeEnv,
     optimizer::OptimizerRule,
     physical_optimizer::PhysicalOptimizerRule,
     prelude::SessionConfig,
@@ -23,7 +22,6 @@ use liquid_cache_datafusion_local::storage::cache_policies::{LiquidPolicy, LruPo
 use native_bridge_common::{log_info, log_debug};
 
 pub struct LiquidOnlyRuntime {
-    runtime_env: Arc<RuntimeEnv>,
     optimizer: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     lineage_optimizer: Arc<dyn OptimizerRule + Send + Sync>,
     _cache_ref: Box<dyn std::any::Any + Send + Sync>,
@@ -40,9 +38,11 @@ impl LiquidOnlyRuntime {
         max_disk_bytes: u64,
         cache_dir: &str,
         eviction_policy: &str,
+        tokio_handle: &tokio::runtime::Handle,
     ) -> Result<&'static LiquidOnlyRuntime, DataFusionError> {
         let result = LIQUID_ONLY.get_or_init(|| {
             let cache_dir = PathBuf::from(cache_dir);
+            let cache_dir = cache_dir.join(format!("node_{}", std::process::id()));
             if let Err(e) = fs::create_dir_all(&cache_dir) {
                 return Err(format!(
                     "Failed to create liquid cache dir {:?}: {}",
@@ -66,12 +66,7 @@ impl LiquidOnlyRuntime {
                 .with_squeeze_policy(Box::new(TranscodeSqueezeEvict))
                 .with_hydration_policy(Box::new(NoHydration::new()));
 
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => return Err(format!("Failed to create tokio runtime for liquid cache init: {}", e)),
-            };
-
-            let (liquid_ctx, liquid_cache_ref) = match rt.block_on(builder.build(bootstrap_cfg)) {
+            let (liquid_ctx, liquid_cache_ref) = match tokio_handle.block_on(builder.build(bootstrap_cfg)) {
                 Ok(result) => result,
                 Err(e) => return Err(format!("Liquid cache build failed: {}", e)),
             };
@@ -94,7 +89,6 @@ impl LiquidOnlyRuntime {
                 .ok_or_else(|| "LineageOptimizer not found in Liquid Cache session state".to_string())?;
 
             Ok(LiquidOnlyRuntime {
-                runtime_env: liquid_ctx.runtime_env(),
                 optimizer: liquid_optimizer,
                 lineage_optimizer,
                 _cache_ref: Box::new(liquid_cache_ref),
@@ -107,10 +101,6 @@ impl LiquidOnlyRuntime {
         result
             .as_ref()
             .map_err(|e| DataFusionError::Execution(e.clone()))
-    }
-
-    pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.runtime_env.clone()
     }
 
     pub fn optimizer(&self) -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
