@@ -268,7 +268,7 @@ public class DataFusionService extends AbstractLifecycleComponent {
         private long liquidCacheSize = 1L * 1024 * 1024 * 1024; // 1GB default
         private long liquidCacheMaxDiskBytes = Long.MAX_VALUE;
         private String liquidCacheDir = "/tmp/opensearch/liquid_cache";
-        private String liquidCacheEvictionPolicy = "liquid";
+        private String liquidCacheEvictionPolicy = "lru";
 
         private Builder() {}
 

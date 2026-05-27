@@ -73,6 +73,12 @@ def configureAnalyticsCluster = { cluster ->
     // Enable pluggable dataformat feature flag
     cluster.systemProperty 'opensearch.experimental.feature.pluggable.dataformat.enabled', 'true'
 
+    // Enable liquid cache feature flag
+    cluster.systemProperty 'opensearch.experimental.feature.liquid_cache.enabled', 'true'
+
+    // Liquid cache dir must be on real filesystem (not tmpfs) for io-uring
+    cluster.setting 'datafusion.liquid_cache.cache_dir', '/home/ec2-user/liquid_cache_integ'
+
     // analytics-engine requires the streaming transport — fragment dispatch is streaming-only.
     cluster.systemProperty 'opensearch.experimental.feature.transport.stream.enabled', 'true'
 }
