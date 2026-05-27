@@ -281,7 +281,7 @@ public final class DatafusionSettings {
      */
     public static final Setting<String> LIQUID_CACHE_EVICTION_POLICY = Setting.simpleString(
         "datafusion.liquid_cache.eviction_policy",
-        "liquid",
+        "lru",
         Setting.Property.NodeScope,
         Setting.Property.Final
     );
@@ -319,9 +319,8 @@ public final class DatafusionSettings {
         INDEXED_SINGLE_COLLECTOR_STRATEGY,
         INDEXED_TREE_COLLECTOR_STRATEGY,
         INDEXED_MAX_COLLECTOR_PARALLELISM,
-        INDEXED_QUERY_STRATEGY
+        INDEXED_QUERY_STRATEGY,
 
-        // Liquid Cache settings
         LIQUID_CACHE_ENABLED,
         LIQUID_CACHE_SIZE,
         LIQUID_CACHE_MAX_DISK_BYTES,
