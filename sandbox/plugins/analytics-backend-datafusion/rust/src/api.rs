@@ -266,6 +266,23 @@ impl DataFusionRuntime {
             liquid_cache_lineage_optimizer: None,
         }
     }
+
+    pub fn apply_liquid_cache_optimizers(
+        &self,
+        mut builder: SessionStateBuilder,
+    ) -> SessionStateBuilder {
+        if let Some(ref optimizer) = self.liquid_cache_optimizer {
+            builder = builder.with_physical_optimizer_rule(optimizer.clone());
+        }
+        if let Some(ref lineage_opt) = self.liquid_cache_lineage_optimizer {
+            builder = builder.with_optimizer_rule(lineage_opt.clone());
+        }
+        builder
+    }
+
+    pub fn has_liquid_cache(&self) -> bool {
+        self.liquid_cache_optimizer.is_some()
+    }
 }
 
 /// Opaque shard view handle returned to the caller.
@@ -348,19 +365,15 @@ pub fn create_global_runtime(
         .with_cache_manager(cache_manager_config)
         .build()?;
 
-    let (liquid_optimizer, liquid_lineage_optimizer) = if liquid_cache_enabled {
-        match crate::liquid_cache::LiquidOnlyRuntime::init(
+    let (liquid_cache_optimizer, liquid_cache_lineage_optimizer) = if liquid_cache_enabled {
+        let liquid_runtime = crate::liquid_cache::LiquidOnlyRuntime::init(
             liquid_cache_size as u64,
             liquid_cache_max_disk_bytes as u64,
             liquid_cache_dir,
             liquid_cache_eviction_policy,
             tokio_handle,
-        ) {
-            Ok(liquid_runtime) => (Some(liquid_runtime.optimizer()), Some(liquid_runtime.lineage_optimizer())),
-            Err(e) => {
-                return Err(e);
-            }
-        }
+        )?;
+        (Some(liquid_runtime.optimizer()), Some(liquid_runtime.lineage_optimizer()))
     } else {
         (None, None)
     };
@@ -369,8 +382,8 @@ pub fn create_global_runtime(
         runtime_env,
         custom_cache_manager,
         dynamic_limit_handle,
-        liquid_cache_optimizer: liquid_optimizer,
-        liquid_cache_lineage_optimizer: liquid_lineage_optimizer,
+        liquid_cache_optimizer,
+        liquid_cache_lineage_optimizer,
     };
     Ok(Box::into_raw(Box::new(runtime)) as i64)
 }
@@ -1023,14 +1036,17 @@ pub fn cancel_query(context_id: i64) {
     query_tracker::cancel_query(context_id);
 }
 
+/// Clears all caching layers: Liquid Cache (in-memory index + disk) and
+/// DataFusion metadata caches (parquet footers + column statistics).
 pub unsafe fn clear_liquid_cache(runtime_ptr: i64) {
     crate::liquid_cache::LiquidOnlyRuntime::reset_cache_if_initialized();
 
-    if runtime_ptr != 0 {
-        let runtime = &*(runtime_ptr as *const DataFusionRuntime);
-        if let Some(ref cache_manager) = runtime.custom_cache_manager {
-            cache_manager.clear_all();
-        }
+    if runtime_ptr == 0 {
+        return;
+    }
+    let runtime = &*(runtime_ptr as *const DataFusionRuntime);
+    if let Some(ref cache_manager) = runtime.custom_cache_manager {
+        cache_manager.clear_all();
     }
 }
 

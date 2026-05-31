@@ -201,7 +201,7 @@ pub async unsafe fn create_session_context(
     config.options_mut().execution.parquet.pushdown_filters = query_config.parquet_pushdown_filters;
     config.options_mut().execution.target_partitions = effective_partitions;
     config.options_mut().execution.batch_size = effective_batch_size;
-    if runtime.liquid_cache_optimizer.is_some() {
+    if runtime.has_liquid_cache() {
         config.options_mut().execution.parquet.schema_force_view_types = false;
         config.options_mut().execution.parquet.skip_arrow_metadata = false;
         config.options_mut().execution.parquet.skip_metadata = false;
@@ -225,15 +225,8 @@ pub async unsafe fn create_session_context(
                 Arc::new(crate::project_row_id_optimizer::ProjectRowIdOptimizer)
             );
     }
-    if let Some(ref optimizer) = runtime.liquid_cache_optimizer {
-        if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
-            state_builder = state_builder.with_physical_optimizer_rule(optimizer.clone());
-        }
-    }
-    if let Some(ref lineage_opt) = runtime.liquid_cache_lineage_optimizer {
-        if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
-            state_builder = state_builder.with_optimizer_rule(lineage_opt.clone());
-        }
+    if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
+        state_builder = runtime.apply_liquid_cache_optimizers(state_builder);
     }
 
     let state = state_builder.build();
