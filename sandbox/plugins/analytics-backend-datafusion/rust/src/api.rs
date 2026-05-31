@@ -156,6 +156,8 @@ pub struct DataFusionRuntime {
     pub runtime_env: datafusion::execution::runtime_env::RuntimeEnv,
     pub custom_cache_manager: Option<CustomCacheManager>,
     pub dynamic_limit_handle: DynamicLimitHandle,
+    pub liquid_cache_optimizer: Option<Arc<dyn datafusion::physical_optimizer::PhysicalOptimizerRule + Send + Sync>>,
+    pub liquid_cache_lineage_optimizer: Option<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>>,
 }
 
 /// Per-file metadata passed from Java at shard view creation time.
@@ -251,9 +253,6 @@ pub fn build_shard_files(
             info
         })
         .collect()
-    pub(crate) dynamic_limit_handle: DynamicLimitHandle,
-    pub liquid_cache_optimizer: Option<Arc<dyn datafusion::physical_optimizer::PhysicalOptimizerRule + Send + Sync>>,
-    pub liquid_cache_lineage_optimizer: Option<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>>,
 }
 
 impl DataFusionRuntime {

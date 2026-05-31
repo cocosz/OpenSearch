@@ -93,9 +93,6 @@ pub async fn execute_query(
 
     let mut state_builder = SessionStateBuilder::new()
         .with_config(config)
-        .with_runtime_env(runtime_env)
-        .with_default_features()
-        .build();
         .with_runtime_env(Arc::from(runtime_env))
         .with_default_features();
 

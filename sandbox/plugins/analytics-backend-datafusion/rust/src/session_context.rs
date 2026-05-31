@@ -224,6 +224,7 @@ pub async unsafe fn create_session_context(
             .with_physical_optimizer_rule(
                 Arc::new(crate::project_row_id_optimizer::ProjectRowIdOptimizer)
             );
+    }
     if let Some(ref optimizer) = runtime.liquid_cache_optimizer {
         if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
             state_builder = state_builder.with_physical_optimizer_rule(optimizer.clone());

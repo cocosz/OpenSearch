@@ -318,7 +318,7 @@ public final class DatafusionSettings {
         INDEXED_SINGLE_COLLECTOR_STRATEGY,
         INDEXED_TREE_COLLECTOR_STRATEGY,
         INDEXED_MAX_COLLECTOR_PARALLELISM,
-        INDEXED_QUERY_STRATEGY
+        INDEXED_QUERY_STRATEGY,
 
         // Liquid Cache settings
         LIQUID_CACHE_ENABLED,
