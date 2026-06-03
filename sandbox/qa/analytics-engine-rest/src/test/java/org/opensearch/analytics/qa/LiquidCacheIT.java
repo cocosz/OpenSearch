@@ -47,6 +47,7 @@ public class LiquidCacheIT extends AnalyticsRestTestCase {
         setupIndex();
 
         verifyQueryReturnsExpectedResult();
+        verifyDslSearchPath();
         verifyDynamicDisableAndReenable();
         verifyDynamicBudgetResize();
     }
@@ -78,6 +79,34 @@ public class LiquidCacheIT extends AnalyticsRestTestCase {
             EXPECTED_SUM_AGE_GT_25
         );
         logger.info("Query latency (LC re-enabled): {}ms", reenabledLatency);
+    }
+
+    private void verifyDslSearchPath() throws Exception {
+        logger.info("Verifying DSL _search path (query_executor.rs)");
+        Request request = new Request("POST", "/" + INDEX_NAME + "/_search");
+        request.setJsonEntity("{"
+            + "\"size\": 0,"
+            + "\"query\": {\"range\": {\"age\": {\"gt\": 25}}},"
+            + "\"aggs\": {\"total_salary\": {\"sum\": {\"field\": \"salary\"}}}"
+            + "}");
+        long start = System.currentTimeMillis();
+        Response response = client().performRequest(request);
+        long elapsed = System.currentTimeMillis() - start;
+
+        assertEquals(200, response.getStatusLine().getStatusCode());
+        Map<String, Object> body = entityAsMap(response);
+        logger.info("DSL _search response: {}", body);
+        logger.info("DSL _search latency: {}ms", elapsed);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> aggs = (Map<String, Object>) body.get("aggregations");
+        assertNotNull("Response should contain aggregations", aggs);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> totalSalary = (Map<String, Object>) aggs.get("total_salary");
+        assertNotNull("Response should contain total_salary agg", totalSalary);
+        Number value = (Number) totalSalary.get("value");
+        assertEquals("DSL agg result mismatch", EXPECTED_SUM_AGE_GT_25, value.longValue());
+        logger.info("DSL _search path verified: sum(salary) where age > 25 = {}", value);
     }
 
     private void verifyDynamicBudgetResize() throws Exception {
