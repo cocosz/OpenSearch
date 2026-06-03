@@ -296,6 +296,7 @@ async fn run_tree_and_plan(
         query_config: std::sync::Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();

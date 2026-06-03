@@ -137,6 +137,7 @@ async fn run_missing_col_tree(tree_bool: BoolNode) -> usize {
         query_config: std::sync::Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
     let ctx = SessionContext::new();
     ctx.register_table("t", provider).unwrap();
@@ -444,6 +445,7 @@ async fn query_with_mismatched_schema(
         query_config: std::sync::Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
     let ctx = SessionContext::new();
     ctx.register_table("t", provider).unwrap();

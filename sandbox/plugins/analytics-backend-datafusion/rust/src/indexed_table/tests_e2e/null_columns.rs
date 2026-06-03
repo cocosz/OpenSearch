@@ -382,6 +382,7 @@ async fn assert_engine_matches_reference_null(name: &str, tree: NT) {
         query_config: std::sync::Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
     let ctx = SessionContext::new();
     ctx.register_table("t", provider).unwrap();

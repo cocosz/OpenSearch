@@ -131,6 +131,7 @@ pub struct IndexedTableConfig {
     /// from position (global_base + rg.first_row + position_in_rg) instead of
     /// being read from parquet. Other projected columns are read normally.
     pub emit_row_ids: bool,
+    pub lc_optimizer: Option<Arc<dyn datafusion::physical_optimizer::PhysicalOptimizerRule + Send + Sync>>,
 }
 
 /// Table provider. Returns a `QueryShardExec` that fans out across chunks.
@@ -446,6 +447,7 @@ impl ExecutionPlan for QueryShardExec {
                 global_base: segment.global_base,
                 emit_row_ids: self.config.emit_row_ids,
                 row_id_output_index: self.row_id_output_index,
+                lc_optimizer: self.config.lc_optimizer.clone(),
             };
             execs.push(Arc::new(exec));
         }
@@ -508,6 +510,7 @@ mod tests {
             ),
             predicate_columns: vec![],
             emit_row_ids: false,
+            lc_optimizer: None,
         }
     }
 

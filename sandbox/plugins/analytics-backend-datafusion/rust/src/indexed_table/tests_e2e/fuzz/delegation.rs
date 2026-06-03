@@ -471,6 +471,7 @@ pub(in crate::indexed_table::tests_e2e) async fn execute_delegation_tree(
         query_config: Arc::new(qc),
         predicate_columns: pred_cols,
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();

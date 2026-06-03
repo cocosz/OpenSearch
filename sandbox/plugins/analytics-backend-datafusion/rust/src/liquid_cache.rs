@@ -177,7 +177,7 @@ impl LiquidOnlyRuntime {
         }
     }
 
-    fn get() -> Option<&'static Self> {
+    pub fn get() -> Option<&'static Self> {
         INSTANCE.get().and_then(|r| r.as_ref().ok())
     }
 

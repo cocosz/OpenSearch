@@ -850,6 +850,7 @@ async unsafe fn execute_indexed_with_context_inner(
         query_config: Arc::clone(&query_config),
         predicate_columns,
         emit_row_ids,
+        lc_optimizer: crate::liquid_cache::LiquidOnlyRuntime::get().map(|rt| rt.optimizer()),
     }));
     ctx.register_table(&table_name, provider)?;
 

@@ -184,6 +184,7 @@ async fn run_two_segment_query(
         query_config: std::sync::Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();
@@ -388,6 +389,7 @@ async fn run_segments(specs: Vec<SegSpec>, num_partitions: usize) -> Vec<(i32, S
         query_config: std::sync::Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();
@@ -891,6 +893,7 @@ async fn run_wide_segments(
         query_config: std::sync::Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();

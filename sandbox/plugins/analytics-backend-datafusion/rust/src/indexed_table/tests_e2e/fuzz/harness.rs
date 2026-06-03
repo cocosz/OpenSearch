@@ -291,6 +291,7 @@ pub(in crate::indexed_table::tests_e2e) async fn execute_tree_with_plan_pushdown
         query_config: Arc::new(qc),
         predicate_columns: collect_predicate_column_indices(&bool_tree),
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();
@@ -472,6 +473,7 @@ async fn run_single_collector_query(
         query_config: Arc::new(qc),
         predicate_columns: pred_cols,
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
     let ctx = SessionContext::new();
     ctx.register_table("t", provider).unwrap();
@@ -681,6 +683,7 @@ async fn run_with_factory_plan(
         query_config: Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
     let ctx = SessionContext::new();
     ctx.register_table("t", provider).unwrap();

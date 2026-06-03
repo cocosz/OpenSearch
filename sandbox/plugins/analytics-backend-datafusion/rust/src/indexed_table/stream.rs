@@ -292,6 +292,7 @@ pub struct IndexedExec {
     /// Index in the OUTPUT schema where computed `___row_id` should be inserted.
     /// `None` when `emit_row_ids=false` or `___row_id` is not in projection.
     pub(crate) row_id_output_index: Option<usize>,
+    pub(crate) lc_optimizer: Option<Arc<dyn datafusion::physical_optimizer::PhysicalOptimizerRule + Send + Sync>>,
 }
 
 impl fmt::Debug for IndexedExec {
@@ -387,6 +388,7 @@ impl ExecutionPlan for IndexedExec {
             self.global_base,
             self.emit_row_ids,
             self.row_id_output_index,
+            self.lc_optimizer.clone(),
         )))
     }
 }
@@ -455,6 +457,7 @@ struct IndexedStream {
     emit_row_ids: bool,
     /// Index in the output schema where computed `___row_id` is inserted.
     row_id_output_index: Option<usize>,
+    lc_optimizer: Option<Arc<dyn datafusion::physical_optimizer::PhysicalOptimizerRule + Send + Sync>>,
 }
 
 impl IndexedStream {
@@ -480,6 +483,7 @@ impl IndexedStream {
         global_base: u64,
         emit_row_ids: bool,
         row_id_output_index: Option<usize>,
+        lc_optimizer: Option<Arc<dyn datafusion::physical_optimizer::PhysicalOptimizerRule + Send + Sync>>,
     ) -> Self {
         let evaluator = Arc::clone(&index_reader.evaluator);
         let batch_coalescer =
@@ -518,6 +522,7 @@ impl IndexedStream {
             global_base,
             emit_row_ids,
             row_id_output_index,
+            lc_optimizer,
         }
     }
 
@@ -531,6 +536,7 @@ impl IndexedStream {
             metadata: Arc::clone(&self.metadata),
             projection: self.projection.clone(),
             predicate: self.predicate.clone(),
+            lc_optimizer: self.lc_optimizer.clone(),
         }
     }
 

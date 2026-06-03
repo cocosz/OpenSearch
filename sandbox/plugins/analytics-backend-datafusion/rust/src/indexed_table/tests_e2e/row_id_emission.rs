@@ -113,6 +113,7 @@ async fn run_tree_row_ids(tree: BoolNode) -> Vec<i64> {
         }),
         predicate_columns: vec![0, 1, 2, 3],
         emit_row_ids: true,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();
@@ -277,6 +278,7 @@ async fn run_tree_row_ids_with_global_base(tree: BoolNode, global_base: u64) -> 
         }),
         predicate_columns: vec![0, 1, 2, 3],
         emit_row_ids: true,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();
@@ -539,6 +541,7 @@ async fn test_row_id_with_data_columns() {
         }),
         predicate_columns: vec![0, 1, 2, 3],
         emit_row_ids: true,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();
@@ -786,6 +789,7 @@ async fn run_two_segments_row_ids(tree: BoolNode) -> Vec<i64> {
         }),
         predicate_columns: vec![0, 1, 2, 3],
         emit_row_ids: true,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();

@@ -454,6 +454,7 @@ async fn run_large(
         query_config: std::sync::Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
 
     let ctx = SessionContext::new();
@@ -905,6 +906,7 @@ async fn run_large_partitioned(
         query_config: std::sync::Arc::new(qc),
         predicate_columns: vec![],
         emit_row_ids: false,
+        lc_optimizer: None,
     }));
     let ctx = SessionContext::new();
     ctx.register_table("t", provider).unwrap();

@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::physical_plan::parquet::metadata::DFParquetMetadata;
 use datafusion::datasource::physical_plan::parquet::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory, RowGroupAccess,
@@ -85,6 +86,7 @@ pub struct RowGroupStreamConfig {
     pub metadata: Arc<ParquetMetaData>,
     pub projection: Option<Vec<usize>>,
     pub predicate: Option<Arc<dyn datafusion::physical_expr::PhysicalExpr>>,
+    pub lc_optimizer: Option<Arc<dyn datafusion::physical_optimizer::PhysicalOptimizerRule + Send + Sync>>,
 }
 
 /// Create a stream that reads a single row group using `RowSelection`.
@@ -175,6 +177,22 @@ fn create_stream_with_access_plan(
     }
 
     let exec: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config_builder.build());
+
+    let exec = match config.lc_optimizer.as_ref() {
+        Some(optimizer) if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() => {
+            let fallback = exec.clone();
+            optimizer.optimize(exec, &ConfigOptions::default()).unwrap_or_else(|e| {
+                log::warn!("[LiquidCache] indexed path optimizer failed, falling back: {}", e);
+                fallback
+            })
+        }
+        _ => exec,
+    };
+
+    if config.lc_optimizer.is_some() {
+        log::debug!("[LiquidCache] indexed path: plan={}", datafusion::physical_plan::displayable(exec.as_ref()).one_line());
+    }
+
     let ctx = Arc::new(datafusion::execution::TaskContext::default());
     let stream = exec.execute(0, ctx)?;
     Ok((stream, exec))
