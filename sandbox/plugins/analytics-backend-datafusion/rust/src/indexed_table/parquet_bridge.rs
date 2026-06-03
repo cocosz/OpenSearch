@@ -20,6 +20,7 @@
 
 use std::sync::Arc;
 
+use native_bridge_common::log_debug;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::config::ConfigOptions;
@@ -180,18 +181,28 @@ fn create_stream_with_access_plan(
 
     let exec = match config.lc_optimizer.as_ref() {
         Some(optimizer) if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() => {
+            log_debug!("[LiquidCache] indexed path: applying optimizer to DataSourceExec");
             let fallback = exec.clone();
-            optimizer.optimize(exec, &ConfigOptions::default()).unwrap_or_else(|e| {
-                log::warn!("[LiquidCache] indexed path optimizer failed, falling back: {}", e);
-                fallback
-            })
+            match optimizer.optimize(exec, &ConfigOptions::default()) {
+                Ok(optimized) => {
+                    log_debug!("[LiquidCache] indexed path: optimizer succeeded, plan={}", datafusion::physical_plan::displayable(optimized.as_ref()).one_line());
+                    optimized
+                }
+                Err(e) => {
+                    log_debug!("[LiquidCache] indexed path: optimizer failed: {}, using fallback", e);
+                    fallback
+                }
+            }
         }
-        _ => exec,
+        Some(_) => {
+            log_debug!("[LiquidCache] indexed path: optimizer present but LC not enabled globally");
+            exec
+        }
+        None => {
+            log_debug!("[LiquidCache] indexed path: no lc_optimizer configured");
+            exec
+        }
     };
-
-    if config.lc_optimizer.is_some() {
-        log::debug!("[LiquidCache] indexed path: plan={}", datafusion::physical_plan::displayable(exec.as_ref()).one_line());
-    }
 
     let ctx = Arc::new(datafusion::execution::TaskContext::default());
     let stream = exec.execute(0, ctx)?;
