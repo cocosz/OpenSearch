@@ -76,6 +76,7 @@ proptest = "=1.4.0"
 
 # Liquid Cache for byte-level caching
 liquid-cache-datafusion-local = { git = "https://github.com/Bukhtawar/liquid-cache", branch = "fix-reexport-conflict", package = "liquid-cache-datafusion-local" }
+liquid-cache-datafusion = { git = "https://github.com/Bukhtawar/liquid-cache", branch = "fix-reexport-conflict", package = "liquid-cache-datafusion" }
 
 # Internal
 native-bridge-common = { path = "common" }
