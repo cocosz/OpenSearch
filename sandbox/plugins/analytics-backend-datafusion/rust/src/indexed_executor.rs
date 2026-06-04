@@ -22,6 +22,7 @@
 use std::sync::Arc;
 
 use native_bridge_common::log_debug;
+use native_bridge_common::log_info;
 use datafusion::{
     physical_plan::displayable,
     physical_plan::execute_stream,
@@ -838,7 +839,7 @@ async unsafe fn execute_indexed_with_context_inner(
     // and producer-side batches agree by construction (see crate::relabel_exec).
     let target_schema = crate::schema_coerce::coerce_inferred_schema(physical_plan.schema());
     let physical_plan = crate::relabel_exec::wrap_if_relabel_needed(physical_plan, target_schema)?;
-    log_debug!("DataFusion physical plan:\n{}", displayable(physical_plan.as_ref()).indent(true));
+    log_info!("DataFusion physical plan:\n{}", displayable(physical_plan.as_ref()).indent(true));
     let df_stream = execute_stream(physical_plan, ctx.task_ctx())
         .map_err(|e| DataFusionError::Execution(format!("execute_stream: {}", e)))?;
 
