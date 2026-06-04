@@ -148,24 +148,16 @@ fn create_stream_with_access_plan(
         Arc::clone(&config.metadata),
     )) as Arc<dyn ParquetFileReaderFactory>;
 
-    let mut parquet_source = ParquetSource::new(config.full_schema.clone())
+    let parquet_source = ParquetSource::new(config.full_schema.clone())
         .with_parquet_file_reader_factory(reader_factory)
         // cannot use page index because we have collector bitset matches that are not visible
         // with just parquet predicates
         .with_enable_page_index(false);
 
-    if push_predicate {
-        if let Some(ref pred) = config.predicate {
-            parquet_source = parquet_source
-                .with_predicate(Arc::clone(pred))
-                .with_pushdown_filters(true)
-                .with_reorder_filters(true);
-        }
-    }
-
-    // Wrap with Liquid Cache when enabled — predicate is None (evaluator handles filtering).
-    // LiquidParquetSource acts as a decoded-batch cache: on HIT returns Arrow directly,
-    // on MISS decodes from Parquet and caches the result.
+    // Liquid Cache wraps the CLEAN source (no predicate) so it acts as a pure
+    // decoded-batch cache without filter pushdown. The BoolNode evaluator handles
+    // all filtering externally. When LC is disabled, fall through to the standard
+    // path which may apply predicate pushdown.
     let config_builder = if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
         if let Some(cache_ref) = crate::liquid_cache::LiquidOnlyRuntime::cache_ref_globally() {
             let liquid_source = liquid_cache_datafusion::LiquidParquetSource::from_parquet_source(
@@ -175,11 +167,29 @@ fn create_stream_with_access_plan(
             FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(liquid_source))
                 .with_file(partitioned_file)
         } else {
-            FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(parquet_source))
+            let mut source = parquet_source;
+            if push_predicate {
+                if let Some(ref pred) = config.predicate {
+                    source = source
+                        .with_predicate(Arc::clone(pred))
+                        .with_pushdown_filters(true)
+                        .with_reorder_filters(true);
+                }
+            }
+            FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(source))
                 .with_file(partitioned_file)
         }
     } else {
-        FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(parquet_source))
+        let mut source = parquet_source;
+        if push_predicate {
+            if let Some(ref pred) = config.predicate {
+                source = source
+                    .with_predicate(Arc::clone(pred))
+                    .with_pushdown_filters(true)
+                    .with_reorder_filters(true);
+            }
+        }
+        FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(source))
             .with_file(partitioned_file)
     };
 
