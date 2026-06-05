@@ -140,10 +140,22 @@ impl LiquidOnlyRuntime {
     }
 
     pub fn reset_cache(&self) {
+        let stats_before = self.storage.stats();
+        log_info!(
+            "[LiquidCache] Clearing cache: entries={}, mem_usage={} bytes, disk_usage={} bytes",
+            stats_before.total_entries,
+            stats_before.memory_usage_bytes,
+            stats_before.disk_usage_bytes
+        );
         self.storage.reset();
         self.recreate_cache_dir();
-        log_info!("[LiquidCache] Cache cleared");
-        self.log_stats();
+        let stats_after = self.storage.stats();
+        log_info!(
+            "[LiquidCache] Cache cleared: entries={}, mem_usage={} bytes, disk_usage={} bytes",
+            stats_after.total_entries,
+            stats_after.memory_usage_bytes,
+            stats_after.disk_usage_bytes
+        );
     }
 
     pub fn log_stats(&self) {
