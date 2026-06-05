@@ -40,7 +40,7 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::PartitionedFile;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use native_bridge_common::log_debug;
+use native_bridge_common::{log_debug, log_info};
 use object_store::{ObjectStore, ObjectStoreExt};
 use prost::bytes::Bytes;
 
@@ -87,20 +87,33 @@ pub struct RowGroupStreamConfig {
     pub predicate: Option<Arc<dyn datafusion::physical_expr::PhysicalExpr>>,
 }
 
+/// Selectivity threshold below which LC with filter pushdown is engaged.
+/// When fewer than this fraction of rows match, LC's column-by-column decode
+/// with filter pushdown avoids decoding non-matching rows — significant savings
+/// for highly selective queries. Above this threshold, most rows match so the
+/// overhead of LC's per-column pipeline outweighs the savings.
+const LC_SELECTIVITY_THRESHOLD: f64 = 0.5;
+
 /// Create a stream that reads a single row group using `RowSelection`.
 ///
 /// Predicate pushdown IS safe here — `RowSelection` is applied during decode,
 /// so the predicate sees only selected rows and indices stay aligned.
+///
+/// `selectivity` is the fraction of rows in this RG that are candidates
+/// (0.0 = no rows, 1.0 = all rows). Used to gate LC: highly selective
+/// queries (low selectivity) benefit from LC's column-by-column decode
+/// with filter pushdown.
 pub fn create_row_selection_stream(
     config: &RowGroupStreamConfig,
     rg_index: usize,
     selection: RowSelection,
     push_predicate: bool,
+    selectivity: f64,
 ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
     let num_rgs = config.metadata.num_row_groups();
     let mut access_plan = ParquetAccessPlan::new_none(num_rgs);
     access_plan.set(rg_index, RowGroupAccess::Selection(selection));
-    create_stream_with_access_plan(config, access_plan, push_predicate)
+    create_stream_with_access_plan(config, access_plan, push_predicate, selectivity)
 }
 
 /// Create a stream that reads a single row group with full scan.
@@ -113,32 +126,16 @@ pub fn create_full_scan_stream(
 ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
     let num_rgs = config.metadata.num_row_groups();
     let mut access_plan = ParquetAccessPlan::new_none(num_rgs);
-    // TODO(page-boundary-selection): replace `Scan` with a `Selection` built
-    // from the caller's candidate bitmap at page boundaries. The idea:
-    //   - Read the RG's `offset_index` to get per-page row counts.
-    //   - For each page, select if any candidate bit falls within its row
-    //     range, else skip.
-    //   - Pass the resulting `RowSelection` via
-    //     `RowGroupAccess::Selection(selection)`.
-    // This keeps the selector Vec small (O(pages), not O(rows)) regardless of
-    // candidate density, while letting parquet skip whole pages whose row
-    // ranges are entirely outside the candidate set. Bigger I/O savings than
-    // today's full-scan for dense-but-clustered matches, and cheap to build
-    // for any selectivity — unifying today's split between `RowSelection`
-    // strategy (<3%) and `BooleanMask` strategy (≥3%).
-    //
-    // Before implementing, verify parquet-rs's `Selection` delivery
-    // semantics (does it deliver contiguous packed rows or original-position
-    // rows with gaps?) so the caller's post-decode mask alignment stays
-    // correct. Documented in `pr-reviews/EVALUATOR_HANDOFF.md`.
     access_plan.set(rg_index, RowGroupAccess::Scan);
-    create_stream_with_access_plan(config, access_plan, false)
+    // Full scan = selectivity 1.0 (all rows), LC bypass.
+    create_stream_with_access_plan(config, access_plan, false, 1.0)
 }
 
 fn create_stream_with_access_plan(
     config: &RowGroupStreamConfig,
     access_plan: ParquetAccessPlan,
     push_predicate: bool,
+    selectivity: f64,
 ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
     let partitioned_file = PartitionedFile::new(config.file_path.clone(), config.file_size)
         .with_extensions(Arc::new(access_plan));
@@ -158,68 +155,86 @@ fn create_stream_with_access_plan(
     // decoded-batch cache without filter pushdown. The BoolNode evaluator handles
     // all filtering externally. When LC is disabled, fall through to the standard
     // path which may apply predicate pushdown.
-    let config_builder = if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
-        if let Some(cache_ref) = crate::liquid_cache::LiquidOnlyRuntime::cache_ref_globally() {
-            // LC cannot cache string/binary columns (always returns None on
-            // get_arrow_array_with_filter). Bypass LC entirely when all projected
-            // columns are uncacheable to avoid the overhead of LC's separate I/O
-            // pipeline on cache-miss (ParquetFallback rebuilds its own stream).
-            let (projected_string_cols, projected_total) = if let Some(ref proj) = config.projection {
-                let string_count = proj.iter().filter(|&&idx| {
-                    config.full_schema.fields().get(idx).map_or(false, |f| {
-                        matches!(f.data_type(),
-                            datafusion::arrow::datatypes::DataType::Utf8
-                            | datafusion::arrow::datatypes::DataType::Utf8View
-                            | datafusion::arrow::datatypes::DataType::LargeUtf8
-                            | datafusion::arrow::datatypes::DataType::Binary
-                            | datafusion::arrow::datatypes::DataType::BinaryView
-                            | datafusion::arrow::datatypes::DataType::LargeBinary
-                            | datafusion::arrow::datatypes::DataType::Dictionary(_, _)
-                        )
-                    })
-                }).count();
-                (string_count, proj.len())
-            } else {
-                let string_count = config.full_schema.fields().iter().filter(|f| {
-                    matches!(f.data_type(),
-                        datafusion::arrow::datatypes::DataType::Utf8
-                        | datafusion::arrow::datatypes::DataType::Utf8View
-                        | datafusion::arrow::datatypes::DataType::LargeUtf8
-                        | datafusion::arrow::datatypes::DataType::Binary
-                        | datafusion::arrow::datatypes::DataType::BinaryView
-                        | datafusion::arrow::datatypes::DataType::LargeBinary
-                        | datafusion::arrow::datatypes::DataType::Dictionary(_, _)
+    // LC engagement gate — two paths:
+    //   A) Filter pushdown: selectivity < 0.5 AND numeric predicate available.
+    //      LC decodes predicate column first, evaluates filter, skips non-matching rows.
+    //   B) Pure cache: ALL projected columns are numeric (no strings).
+    //      LC caches decoded Arrow arrays; warm queries skip parquet decode entirely.
+    //
+    // String columns are never cached by LC (is_string_type guard rejects them),
+    // and on miss they force a full parquet read of ALL columns. So LC is only
+    // engaged when it can serve every projected column from cache (path B) or
+    // when filter pushdown skips most rows (path A).
+    let lc_globally_enabled = crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally();
+
+    let has_numeric_predicate = config.predicate.as_ref().map_or(false, |pred| {
+        let referenced = datafusion::physical_expr::utils::collect_columns(pred);
+        referenced.iter().any(|col| {
+            config.full_schema.fields().get(col.index()).map_or(false, |f| {
+                f.data_type().is_numeric()
+                    || matches!(f.data_type(),
+                        datafusion::arrow::datatypes::DataType::Date32
+                        | datafusion::arrow::datatypes::DataType::Date64
+                        | datafusion::arrow::datatypes::DataType::Timestamp(_, _)
+                        | datafusion::arrow::datatypes::DataType::Boolean
                     )
-                }).count();
-                (string_count, config.full_schema.fields().len())
-            };
-            if projected_string_cols == projected_total {
-                log_debug!(
-                    "[parquet_bridge] Bypassing LC: all {}/{} projected columns are \
-                     string/binary (uncacheable). file={}",
-                    projected_string_cols,
-                    projected_total,
-                    config.file_path,
-                );
-                let mut source = parquet_source;
-                if push_predicate {
-                    if let Some(ref pred) = config.predicate {
-                        source = source
-                            .with_predicate(Arc::clone(pred))
-                            .with_pushdown_filters(true)
-                            .with_reorder_filters(true);
-                    }
-                }
-                FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(source))
-                    .with_file(partitioned_file)
-            } else {
-                let liquid_source = liquid_cache_datafusion::LiquidParquetSource::from_parquet_source(
-                    parquet_source,
-                    cache_ref,
-                );
-                FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(liquid_source))
-                    .with_file(partitioned_file)
+            })
+        })
+    });
+
+    let all_numeric_projection = config.projection.as_ref().map_or(false, |proj| {
+        proj.iter().all(|&idx| {
+            config.full_schema.fields().get(idx).map_or(false, |f| {
+                f.data_type().is_numeric()
+                    || matches!(f.data_type(),
+                        datafusion::arrow::datatypes::DataType::Date32
+                        | datafusion::arrow::datatypes::DataType::Date64
+                        | datafusion::arrow::datatypes::DataType::Timestamp(_, _)
+                        | datafusion::arrow::datatypes::DataType::Boolean
+                    )
+            })
+        })
+    });
+
+    let use_lc = lc_globally_enabled
+        && ((selectivity < LC_SELECTIVITY_THRESHOLD && has_numeric_predicate)
+            || all_numeric_projection);
+
+    log_info!(
+        "[parquet_bridge] gate: lc_enabled={}, selectivity={:.3}, numeric_pred={}, \
+         all_numeric_proj={}, use_lc={}, file={}",
+        lc_globally_enabled,
+        selectivity,
+        has_numeric_predicate,
+        all_numeric_projection,
+        use_lc,
+        config.file_path,
+    );
+
+    let config_builder = if use_lc {
+        if let Some(cache_ref) = crate::liquid_cache::LiquidOnlyRuntime::cache_ref_globally() {
+            log_info!(
+                "[parquet_bridge] LC ENGAGED: selectivity={:.3}, all_numeric={}",
+                selectivity,
+                all_numeric_projection,
+            );
+            // Pass predicate to LC so it applies filter pushdown during decode.
+            // LC decodes predicate columns first, evaluates filter, then only
+            // decodes matching rows of other columns. Cached predicate columns
+            // are served from memory on repeat queries.
+            let mut source = parquet_source;
+            if let Some(ref pred) = config.predicate {
+                source = source
+                    .with_predicate(Arc::clone(pred))
+                    .with_pushdown_filters(true)
+                    .with_reorder_filters(true);
             }
+            let liquid_source = liquid_cache_datafusion::LiquidParquetSource::from_parquet_source(
+                source,
+                cache_ref,
+            );
+            FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(liquid_source))
+                .with_file(partitioned_file)
         } else {
             let mut source = parquet_source;
             if push_predicate {

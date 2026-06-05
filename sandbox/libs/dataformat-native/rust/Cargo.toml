@@ -75,8 +75,8 @@ tokio-metrics = { version = "=0.5.0", features = ["rt"] }
 proptest = "=1.4.0"
 
 # Liquid Cache for byte-level caching
-liquid-cache-datafusion-local = { git = "https://github.com/cocosz/liquid-cache", branch = "liquid-cache-opensearch-integration", package = "liquid-cache-datafusion-local" }
-liquid-cache-datafusion = { git = "https://github.com/cocosz/liquid-cache", branch = "liquid-cache-opensearch-integration", package = "liquid-cache-datafusion" }
+liquid-cache-datafusion-local = { git = "https://github.com/cocosz/liquid-cache", branch = "pr3-on-integration", package = "liquid-cache-datafusion-local" }
+liquid-cache-datafusion = { git = "https://github.com/cocosz/liquid-cache", branch = "pr3-on-integration", package = "liquid-cache-datafusion" }
 
 # Internal
 native-bridge-common = { path = "common" }
@@ -87,7 +87,7 @@ opensearch-repository-fs = { path = "../../../plugins/native-repository-fs/src/m
 
 [profile.release]
 lto = true
-codegen-units = 1
+codegen-units = 8
 incremental = true
 debug = "line-tables-only"
 strip = false

@@ -201,11 +201,8 @@ pub async unsafe fn create_session_context(
     config.options_mut().execution.parquet.pushdown_filters = query_config.parquet_pushdown_filters;
     config.options_mut().execution.target_partitions = effective_partitions;
     config.options_mut().execution.batch_size = effective_batch_size;
-    if runtime.has_liquid_cache() {
-        config.options_mut().execution.parquet.schema_force_view_types = false;
-        config.options_mut().execution.parquet.skip_arrow_metadata = false;
-        config.options_mut().execution.parquet.skip_metadata = false;
-    }
+    // LC session config is applied only when LC is actually engaged (inside
+    // parquet_bridge.rs), not globally.
 
     let mut state_builder = SessionStateBuilder::new()
         .with_config(config)
@@ -225,8 +222,14 @@ pub async unsafe fn create_session_context(
                 Arc::new(crate::project_row_id_optimizer::ProjectRowIdOptimizer)
             );
     }
+    // Only the physical optimizer (LocalModeLiquidCacheOptimizer) is applied.
+    // It wraps ParquetSource with LiquidParquetSource for decoded-batch caching.
+    // The LineageOptimizer (logical) is excluded — it adds O(nodes*exprs)
+    // planning overhead that causes 2x regression on string-heavy queries.
     if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
-        state_builder = runtime.apply_liquid_cache_optimizers(state_builder);
+        if let Some(ref optimizer) = runtime.liquid_cache_optimizer {
+            state_builder = state_builder.with_physical_optimizer_rule(optimizer.clone());
+        }
     }
 
     let state = state_builder.build();

@@ -539,12 +539,14 @@ impl IndexedStream {
         rg: &RowGroupInfo,
         selection: RowSelection,
         push_predicate: bool,
+        selectivity: f64,
     ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
         parquet_bridge::create_row_selection_stream(
             &self.bridge_config(),
             rg.index,
             selection,
             push_predicate,
+            selectivity,
         )
     }
 
@@ -965,7 +967,7 @@ impl IndexedStream {
                     let push =
                         base_push && !alignment_risk && !self.evaluator.forbid_parquet_pushdown();
 
-                    match self.create_row_selection_stream(&rg, selection, push) {
+                    match self.create_row_selection_stream(&rg, selection, push, selectivity) {
                         Ok((stream, plan)) => {
                             if let Some(ref timer) = self.metrics.parquet_time {
                                 timer.add_duration(t_plan.elapsed());
