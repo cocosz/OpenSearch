@@ -88,7 +88,8 @@ pub async fn execute_query(
     if runtime.has_liquid_cache() {
         config.options_mut().execution.parquet.schema_force_view_types = false;
         config.options_mut().execution.parquet.skip_arrow_metadata = false;
-        config.options_mut().execution.parquet.skip_metadata = false;
+        // Note: skip_metadata left at default (true). LiquidParquetOpener loads
+        // metadata independently via ArrowReaderOptions.
     }
 
     let mut state_builder = SessionStateBuilder::new()

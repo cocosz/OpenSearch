@@ -204,7 +204,10 @@ pub async unsafe fn create_session_context(
     if runtime.has_liquid_cache() {
         config.options_mut().execution.parquet.schema_force_view_types = false;
         config.options_mut().execution.parquet.skip_arrow_metadata = false;
-        config.options_mut().execution.parquet.skip_metadata = false;
+        // Note: skip_metadata left at default (true). LiquidParquetOpener loads
+        // metadata independently via ArrowReaderOptions. Leaving this at default
+        // avoids redundant footer re-reads for queries that stay on the native
+        // ParquetSource path (e.g., all-string projections that bypass LC rewrite).
     }
 
     let mut state_builder = SessionStateBuilder::new()
