@@ -140,6 +140,16 @@ public class FeatureFlags {
     );
 
     /**
+     * Gates the functionality of Liquid Cache for byte-level Parquet caching.
+     */
+    public static final String LIQUID_CACHE_EXPERIMENTAL_FLAG = FEATURE_FLAG_PREFIX + "liquid_cache.enabled";
+    public static final Setting<Boolean> LIQUID_CACHE_EXPERIMENTAL_SETTING = Setting.boolSetting(
+        LIQUID_CACHE_EXPERIMENTAL_FLAG,
+        false,
+        Property.NodeScope
+    );
+
+    /**
      * Gates the snapshot resilience optimizations (timeout budgets, circuit breaker, retry foundation).
      * Default off for the first minor, flipped on in the next, removed one minor later.
      */
@@ -174,6 +184,7 @@ public class FeatureFlags {
                 put(PLUGGABLE_DATAFORMAT_EXPERIMENTAL_SETTING, PLUGGABLE_DATAFORMAT_EXPERIMENTAL_SETTING.getDefault(Settings.EMPTY));
                 put(SNAPSHOT_STRICT_VERSION_PARSING_SETTING, SNAPSHOT_STRICT_VERSION_PARSING_SETTING.getDefault(Settings.EMPTY));
                 put(SNAPSHOT_RESILIENCE_SETTING, SNAPSHOT_RESILIENCE_SETTING.getDefault(Settings.EMPTY));
+                put(LIQUID_CACHE_EXPERIMENTAL_SETTING, LIQUID_CACHE_EXPERIMENTAL_SETTING.getDefault(Settings.EMPTY));
             }
         };
 

@@ -95,6 +95,11 @@ crc32fast = { workspace = true }
 # rewrite. STANDARD alphabet matches the OpenSearch `binary` field wire contract.
 base64 = "0.22"
 
+# Liquid Cache for byte-level caching (experimental, requires io-uring — Linux only)
+[target.'cfg(target_os = "linux")'.dependencies]
+liquid-cache-datafusion-local = { workspace = true }
+liquid-cache-datafusion = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = { workspace = true }

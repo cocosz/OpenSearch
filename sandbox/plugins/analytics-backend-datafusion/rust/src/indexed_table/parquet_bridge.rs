@@ -46,6 +46,7 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::PartitionedFile;
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use native_bridge_common::{log_debug, log_info};
 use object_store::{ObjectStore, ObjectStoreExt};
 use prost::bytes::Bytes;
 
@@ -173,20 +174,27 @@ pub struct RowGroupStreamConfig {
     pub io_stats: Arc<ReadIoStats>,
 }
 
+
 /// Create a stream that reads a single row group using `RowSelection`.
 ///
 /// Predicate pushdown IS safe here — `RowSelection` is applied during decode,
 /// so the predicate sees only selected rows and indices stay aligned.
+///
+/// `selectivity` is the fraction of rows in this RG that are candidates
+/// (0.0 = no rows, 1.0 = all rows). Used to gate LC: highly selective
+/// queries (low selectivity) benefit from LC's column-by-column decode
+/// with filter pushdown.
 pub fn create_row_selection_stream(
     config: &RowGroupStreamConfig,
     rg_index: usize,
     selection: RowSelection,
     push_predicate: bool,
+    selectivity: f64,
 ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
     let num_rgs = config.metadata.num_row_groups();
     let mut access_plan = ParquetAccessPlan::new_none(num_rgs);
     access_plan.set(rg_index, RowGroupAccess::Selection(selection));
-    create_stream_with_access_plan(config, access_plan, push_predicate)
+    create_stream_with_access_plan(config, access_plan, push_predicate, selectivity)
 }
 
 /// Create a stream that reads a single row group with full scan.
@@ -199,32 +207,16 @@ pub fn create_full_scan_stream(
 ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
     let num_rgs = config.metadata.num_row_groups();
     let mut access_plan = ParquetAccessPlan::new_none(num_rgs);
-    // TODO(page-boundary-selection): replace `Scan` with a `Selection` built
-    // from the caller's candidate bitmap at page boundaries. The idea:
-    //   - Read the RG's `offset_index` to get per-page row counts.
-    //   - For each page, select if any candidate bit falls within its row
-    //     range, else skip.
-    //   - Pass the resulting `RowSelection` via
-    //     `RowGroupAccess::Selection(selection)`.
-    // This keeps the selector Vec small (O(pages), not O(rows)) regardless of
-    // candidate density, while letting parquet skip whole pages whose row
-    // ranges are entirely outside the candidate set. Bigger I/O savings than
-    // today's full-scan for dense-but-clustered matches, and cheap to build
-    // for any selectivity — unifying today's split between `RowSelection`
-    // strategy (<3%) and `BooleanMask` strategy (≥3%).
-    //
-    // Before implementing, verify parquet-rs's `Selection` delivery
-    // semantics (does it deliver contiguous packed rows or original-position
-    // rows with gaps?) so the caller's post-decode mask alignment stays
-    // correct. Documented in `pr-reviews/EVALUATOR_HANDOFF.md`.
     access_plan.set(rg_index, RowGroupAccess::Scan);
-    create_stream_with_access_plan(config, access_plan, false)
+    // Full scan = selectivity 1.0 (all rows).
+    create_stream_with_access_plan(config, access_plan, false, 1.0)
 }
 
 fn create_stream_with_access_plan(
     config: &RowGroupStreamConfig,
     access_plan: ParquetAccessPlan,
     push_predicate: bool,
+    selectivity: f64,
 ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
     let partitioned_file = PartitionedFile::new(config.file_path.clone(), config.file_size)
         .with_extensions(Arc::new(access_plan));
@@ -235,24 +227,125 @@ fn create_stream_with_access_plan(
         Arc::clone(&config.io_stats),
     )) as Arc<dyn ParquetFileReaderFactory>;
 
-    let mut parquet_source = ParquetSource::new(config.full_schema.clone())
+    let parquet_source = ParquetSource::new(config.full_schema.clone())
         .with_parquet_file_reader_factory(reader_factory)
         // cannot use page index because we have collector bitset matches that are not visible
         // with just parquet predicates
         .with_enable_page_index(false);
 
-    if push_predicate {
-        if let Some(ref pred) = config.predicate {
-            parquet_source = parquet_source
-                .with_predicate(Arc::clone(pred))
-                .with_pushdown_filters(true)
-                .with_reorder_filters(true);
-        }
-    }
+    // Liquid Cache wraps the CLEAN source (no predicate) so it acts as a pure
+    // decoded-batch cache without filter pushdown. The BoolNode evaluator handles
+    // all filtering externally. When LC is disabled, fall through to the standard
+    // path which may apply predicate pushdown.
+    // LC engagement (Linux only — requires io-uring): wrap when ALL projected
+    // columns are cacheable (numeric/date/timestamp/boolean) and no predicate
+    // column is string. The opener decides per-file whether to STREAM or DELEGATE.
+    #[cfg(target_os = "linux")]
+    let use_lc = {
+        let lc_globally_enabled = crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally();
+        let max_cols = crate::liquid_cache::lc_max_columns();
+        let all_numeric_projection = config.projection.as_ref().map_or(false, |proj| {
+            !proj.is_empty() && proj.len() <= max_cols && proj.iter().all(|&idx| {
+                config.full_schema.fields().get(idx).map_or(false, |f| {
+                    f.data_type().is_numeric()
+                        || matches!(f.data_type(),
+                            datafusion::arrow::datatypes::DataType::Date32
+                            | datafusion::arrow::datatypes::DataType::Date64
+                            | datafusion::arrow::datatypes::DataType::Timestamp(_, _)
+                            | datafusion::arrow::datatypes::DataType::Boolean
+                        )
+                })
+            })
+        });
+        let predicate_has_string = config.predicate.as_ref().map_or(false, |pred| {
+            let referenced = datafusion::physical_expr::utils::collect_columns(pred);
+            referenced.iter().any(|col| {
+                config.full_schema.fields().get(col.index()).map_or(false, |f| {
+                    matches!(
+                        f.data_type(),
+                        datafusion::arrow::datatypes::DataType::Utf8
+                            | datafusion::arrow::datatypes::DataType::Utf8View
+                            | datafusion::arrow::datatypes::DataType::LargeUtf8
+                            | datafusion::arrow::datatypes::DataType::Binary
+                            | datafusion::arrow::datatypes::DataType::BinaryView
+                            | datafusion::arrow::datatypes::DataType::LargeBinary
+                    )
+                })
+            })
+        });
+        let result = lc_globally_enabled && all_numeric_projection && !predicate_has_string;
+        log_debug!(
+            "[parquet_bridge] gate: selectivity={:.3}, all_numeric_proj={}, pred_has_string={}, use_lc={}",
+            selectivity, all_numeric_projection, predicate_has_string, result,
+        );
+        result
+    };
+    #[cfg(not(target_os = "linux"))]
+    let use_lc = false;
 
-    let mut config_builder =
-        FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(parquet_source))
-            .with_file(partitioned_file);
+    #[cfg(target_os = "linux")]
+    let config_builder = if use_lc {
+        if let Some(cache_ref) = crate::liquid_cache::LiquidOnlyRuntime::cache_ref_globally() {
+            let mut source = parquet_source;
+            if push_predicate {
+                if let Some(ref pred) = config.predicate {
+                    source = source
+                        .with_predicate(Arc::clone(pred))
+                        .with_pushdown_filters(true)
+                        .with_reorder_filters(true);
+                }
+            }
+            let liquid_source = liquid_cache_datafusion::LiquidParquetSource::from_parquet_source(
+                source,
+                cache_ref,
+            );
+            FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(liquid_source))
+                .with_file(partitioned_file)
+        } else {
+            let mut source = parquet_source;
+            if push_predicate {
+                if let Some(ref pred) = config.predicate {
+                    source = source
+                        .with_predicate(Arc::clone(pred))
+                        .with_pushdown_filters(true)
+                        .with_reorder_filters(true);
+                }
+            }
+            FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(source))
+                .with_file(partitioned_file)
+        }
+    } else {
+        let mut source = parquet_source;
+        if push_predicate {
+            if let Some(ref pred) = config.predicate {
+                source = source
+                    .with_predicate(Arc::clone(pred))
+                    .with_pushdown_filters(true)
+                    .with_reorder_filters(true);
+            }
+        }
+        FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(source))
+            .with_file(partitioned_file)
+    };
+
+    #[cfg(not(target_os = "linux"))]
+    let config_builder = {
+        let _ = use_lc;
+        let _ = selectivity;
+        let mut source = parquet_source;
+        if push_predicate {
+            if let Some(ref pred) = config.predicate {
+                source = source
+                    .with_predicate(Arc::clone(pred))
+                    .with_pushdown_filters(true)
+                    .with_reorder_filters(true);
+            }
+        }
+        FileScanConfigBuilder::new(config.store_url.clone(), Arc::new(source))
+            .with_file(partitioned_file)
+    };
+
+    let mut config_builder = config_builder;
 
     if let Some(ref proj) = config.projection {
         // Empty projection (e.g. COUNT(*)) is honoured as "read no
