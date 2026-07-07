@@ -55,6 +55,9 @@ pub mod scoped_page_index_reader;
 pub mod search_stats;
 pub mod stats;
 pub mod task_monitors;
+pub mod udaf;
+pub mod udf;
+pub mod udwf;
 
 #[cfg(target_os = "linux")]
 pub mod liquid_cache;
