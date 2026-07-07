@@ -1160,6 +1160,7 @@ impl IndexedStream {
                         && !alignment_risk
                         && !self.evaluator.forbid_parquet_pushdown();
 
+                    let selectivity = candidates.len() as f64 / rg.num_rows as f64;
                     match self.create_row_selection_stream(&rg, selection, push, selectivity) {
                         Ok((stream, plan)) => {
                             if let Some(ref timer) = self.metrics.parquet_time {

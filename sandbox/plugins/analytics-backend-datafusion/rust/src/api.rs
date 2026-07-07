@@ -62,7 +62,7 @@ use roaring::RoaringBitmap;
 
 use crate::cancellation;
 use crate::cross_rt_stream::CrossRtStream;
-use crate::custom_cache_manager::CustomCacheManager;
+use crate::cache::CustomCacheManager;
 use crate::datafusion_query_config::DatafusionQueryConfig;
 use crate::helper::{build_query_runtime_env_with_store, new_query_tracking_context};
 use crate::indexed_executor::execute_indexed_query;
