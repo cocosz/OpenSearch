@@ -41,7 +41,7 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 
-use crate::eviction_policy::CacheEvictionPolicy;
+use crate::cache::eviction_policy::CacheEvictionPolicy;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 

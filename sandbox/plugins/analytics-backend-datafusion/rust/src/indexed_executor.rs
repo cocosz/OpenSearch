@@ -75,7 +75,7 @@ use crate::indexed_table::metrics::StreamMetrics;
 use crate::indexed_table::page_pruner::{
     build_pruning_predicate, PagePruneMetrics, StatsPruneTree,
 };
-use crate::parquet_page_cache::{
+use crate::cache::page_index::{
     load_scoped_page_index_cols, resolve_predicate_parquet_columns_pair,
 };
 

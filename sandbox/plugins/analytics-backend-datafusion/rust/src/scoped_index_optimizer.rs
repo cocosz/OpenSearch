@@ -185,7 +185,7 @@ impl PhysicalOptimizerRule for ScopedPageIndexOptimizer {
 mod tests {
     use super::*;
     use crate::cache::page_index;
-    use crate::parquet_page_cache::{clear_scoped_cache_for_test, scoped_cache_stats};
+    use crate::cache::page_index::{clear_scoped_cache_for_test, scoped_cache_stats};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::execution::cache::DefaultFilesMetadataCache;
     use datafusion::execution::object_store::ObjectStoreUrl;

@@ -6,7 +6,7 @@
  * compatible open source license.
  */
 
-use crate::eviction_policy::{create_policy, CacheError, CachePolicy, CacheResult, PolicyType};
+use crate::cache::eviction_policy::{create_policy, CacheError, CachePolicy, CacheResult, PolicyType};
 use arrow_array::Array;
 use dashmap::DashMap;
 use datafusion::common::stats::{ColumnStatistics, Precision};
