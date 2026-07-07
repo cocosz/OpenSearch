@@ -55,23 +55,6 @@ pub mod scoped_page_index_reader;
 pub mod search_stats;
 pub mod stats;
 pub mod task_monitors;
-pub mod udaf;
-pub mod udf;
-pub mod udwf;
 
-// Path aliases — old module names still resolve unchanged.
-pub use cache::custom_cache_manager;
-pub use cache::eviction_policy;
-pub use cache::page_index as parquet_page_cache;
-pub use cache::statistics_cache;
-
-#[cfg(test)]
-mod spill_e2e_test;
-
-// End-to-end TieredObjectStore + TieredBlockCache integration tests. Located here
-// (not in the lower-level `opensearch-tiered-storage` crate) because they drive a
-// real DataFusion session + Parquet I/O, and DataFusion/Parquet/Arrow are already
-// normal dependencies of this crate — keeping the storage-primitive crate's test
-// build free of the DataFusion stack.
-#[cfg(test)]
-mod tiered_storage_integration_tests;
+#[cfg(target_os = "linux")]
+pub mod liquid_cache;
