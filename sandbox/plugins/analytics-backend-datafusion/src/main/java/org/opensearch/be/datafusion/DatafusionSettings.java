@@ -315,7 +315,16 @@ public final class DatafusionSettings {
         INDEXED_PUSHDOWN_FILTERS,
         INDEXED_MIN_SKIP_RUN_DEFAULT,
         INDEXED_MIN_SKIP_RUN_SELECTIVITY_THRESHOLD,
-        INDEXED_FORCE_STRATEGY
+        INDEXED_FORCE_STRATEGY,
+
+        // Liquid Cache settings
+        LIQUID_CACHE_ENABLED,
+        LIQUID_CACHE_SIZE,
+        LIQUID_CACHE_MAX_DISK_BYTES,
+        LIQUID_CACHE_DIR,
+        LIQUID_CACHE_EVICTION_POLICY,
+        LIQUID_CACHE_SELECTIVITY_THRESHOLD,
+        LIQUID_CACHE_MAX_COLUMNS
     );
 
     // ── Snapshot management ──
