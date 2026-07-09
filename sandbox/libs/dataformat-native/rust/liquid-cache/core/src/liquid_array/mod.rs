@@ -6,6 +6,8 @@ mod float_array;
 mod linear_integer_array;
 mod primitive_array;
 pub mod raw;
+#[cfg(test)]
+mod fuzz_tests;
 
 use std::{any::Any, sync::Arc};
 
