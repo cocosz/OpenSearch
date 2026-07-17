@@ -19,10 +19,13 @@ use std::{
     task::{Context, Poll},
 };
 
+use std::collections::HashMap;
+
 use super::liquid_cache_reader::{
-    LiquidCacheReader, LiquidCacheReaderConfig, ParquetFallbackConfig,
+    CacheGrid, LiquidCacheReader, LiquidCacheReaderConfig, PageGrids, ParquetFallbackConfig,
 };
 use super::utils::{get_root_column_ids, limit_row_selection, offset_row_selection};
+use crate::cache::column_page_map;
 
 type PlanResult = Option<PlanningContext>;
 
@@ -125,6 +128,11 @@ impl ReaderFactory {
             );
         }
 
+        // Cache exactly the same columns as before (predicate columns when a
+        // predicate is present, else all projected columns) — the page grid
+        // changes only the GRANULARITY (page vs batch), not which columns are
+        // cached. The grid is resolved from that same cacheable set.
+        let grid = resolve_cache_grid(&self.metadata, row_group_idx, &predicate_column_ids);
         let cached_row_group = self
             .cached_file
             .create_row_group(row_group_idx as u64, predicate_column_ids.clone());
@@ -139,6 +147,7 @@ impl ReaderFactory {
             cache_projection,
             projection_column_ids,
             cache_column_ids,
+            grid,
         };
 
         Some(context)
@@ -163,6 +172,74 @@ struct PlanningContext {
     cache_projection: ProjectionMask,
     projection_column_ids: Vec<usize>,
     cache_column_ids: Vec<usize>,
+    grid: CacheGrid,
+}
+
+/// Returns true when the page-grid experiment is enabled via env var.
+/// Kept as an env flag (not a cluster setting) to keep the experiment isolated
+/// from the shippable batch-grid path.
+fn page_grid_enabled() -> bool {
+    matches!(
+        std::env::var("LC_PAGE_GRID").ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE")
+    )
+}
+
+/// Resolves the cache grid for a row group (lc-page-key experiment).
+///
+/// Builds a per-column page layout for exactly the CACHEABLE columns (the same
+/// set the batch grid would cache). Page grid is used only when the env flag is
+/// on AND every cacheable column has a page index; each column keeps its own
+/// layout and the reader gathers per-column pages independently. Any cacheable
+/// column lacking a page index falls back to the batch grid, which is always
+/// correct.
+///
+/// NOTE: `cacheable_column_ids` are ROOT column ids; the OffsetIndex is keyed by
+/// LEAF column. For the flat numeric columns Liquid Cache targets, leaf == root.
+fn resolve_cache_grid(
+    metadata: &ParquetMetaData,
+    row_group_idx: usize,
+    cacheable_column_ids: &[usize],
+) -> CacheGrid {
+    if !page_grid_enabled() || cacheable_column_ids.is_empty() {
+        return CacheGrid::Batch;
+    }
+
+    // EXPERIMENT diagnostic: distinguish "no offset index in metadata at all"
+    // (reader parsed metadata without a page-index policy, or file has none)
+    // from "a specific column lacks a page index".
+    if metadata.offset_index().is_none() {
+        log::debug!(
+            "[LC-PageGrid] rg={} fallback=batch reason=metadata_has_no_offset_index \
+             (reader page-index policy off, or file written without page index)",
+            row_group_idx,
+        );
+        return CacheGrid::Batch;
+    }
+
+    let mut maps = HashMap::with_capacity(cacheable_column_ids.len());
+    for &col in cacheable_column_ids {
+        match column_page_map(metadata, row_group_idx, col) {
+            Some(map) => {
+                maps.insert(col, map);
+            }
+            None => {
+                log::debug!(
+                    "[LC-PageGrid] rg={} fallback=batch reason=col_{}_no_page_index",
+                    row_group_idx,
+                    col,
+                );
+                return CacheGrid::Batch; // some column lacks a page index
+            }
+        }
+    }
+
+    log::debug!(
+        "[LC-PageGrid] rg={} using page grid for {} cacheable cols (per-column layouts)",
+        row_group_idx,
+        cacheable_column_ids.len(),
+    );
+    CacheGrid::Page(Arc::new(PageGrids::new(maps)))
 }
 
 fn build_liquid_cache_reader(
@@ -182,6 +259,7 @@ fn build_liquid_cache_reader(
         cached_row_group: context.cached_row_group,
         projection_columns: context.projection_column_ids,
         schema,
+        grid: context.grid,
         parquet_fallback: ParquetFallbackConfig {
             row_group_idx: context.row_group_idx,
             metadata: Arc::clone(&reader_factory.metadata),

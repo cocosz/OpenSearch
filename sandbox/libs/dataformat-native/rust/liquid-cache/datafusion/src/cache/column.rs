@@ -10,7 +10,7 @@ use parquet::arrow::arrow_reader::ArrowPredicate;
 
 use crate::{
     LiquidPredicate,
-    cache::{BatchID, ColumnAccessPath, ParquetArrayID},
+    cache::{BatchID, ColumnAccessPath, PageID, ParquetArrayID},
 };
 use std::sync::Arc;
 
@@ -161,6 +161,56 @@ impl CachedColumn {
     pub(crate) fn get_arrow_array_test_only(&self, batch_id: BatchID) -> Option<ArrayRef> {
         let entry_id = self.entry_id(batch_id).into();
         self.cache_store.get(&entry_id).read()
+    }
+
+    // ── Page-grid API (lc-page-key experiment) ──
+    //
+    // Entries are keyed by physical Parquet page (`file|rg|col|page`) instead of
+    // by row-batch. These methods are predicate-agnostic — they do NOT check
+    // `is_predicate_column` — but the reader only invokes them for the cacheable
+    // set (the same columns the batch grid caches: predicate columns when a
+    // predicate is present, else all projected columns), so the cached column
+    // set is unchanged; only the granularity is. The string-type gate is kept
+    // (string caching is out of scope). Unlike the batch API these store/return
+    // the FULL page array with no filter applied — the reader slices each page
+    // to the requested row range and concatenates.
+
+    /// Get a whole cached page for this column (page grid). Records hit/miss.
+    /// Returns `None` on miss or for string columns.
+    pub fn get_page(&self, page_id: PageID) -> Option<ArrayRef> {
+        if is_string_type(self.field.data_type()) {
+            return None;
+        }
+        let entry_id = self.column_path.entry_id_for_page(page_id).into();
+        let result = self.cache_store.get(&entry_id).read();
+        if result.is_some() {
+            self.cache_store.observer().runtime_stats().incr_cache_hit();
+        } else {
+            self.cache_store
+                .observer()
+                .runtime_stats()
+                .incr_cache_miss();
+        }
+        result
+    }
+
+    /// Insert a whole page array for this column (page grid). Predicate-agnostic
+    /// at this layer (no `is_predicate_column` check); the reader only calls it
+    /// for cacheable, page-mapped columns. String columns are rejected.
+    pub fn insert_page(
+        self: &Arc<Self>,
+        page_id: PageID,
+        array: ArrayRef,
+    ) -> Result<(), InsertArrowArrayError> {
+        if is_string_type(self.field.data_type()) {
+            return Err(InsertArrowArrayError::CacheFull);
+        }
+        let entry_id = self.column_path.entry_id_for_page(page_id).into();
+        if self.cache_store.is_cached(&entry_id) {
+            return Err(InsertArrowArrayError::AlreadyCached);
+        }
+        self.cache_store.insert(entry_id, array).execute()?;
+        Ok(())
     }
 
     /// Insert an array into the cache.

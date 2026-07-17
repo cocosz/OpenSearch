@@ -38,6 +38,12 @@ def numZones = findProperty('numZones') as Integer ?: 1
 testClusters {
   runTask {
     testDistribution = 'archive'
+    // lc-page-key EXPERIMENT: testClusters nodes fork with a clean environment,
+    // so `LC_PAGE_GRID=1 ./gradlew run` never reaches the node JVM. Propagate it
+    // here so the native page-grid flag engages. Experiment-branch only.
+    if (System.getenv('LC_PAGE_GRID') != null) {
+      environment 'LC_PAGE_GRID', System.getenv('LC_PAGE_GRID')
+    }
     if (numZones > 1) numberOfZones = numZones
     if (numNodes > 1) numberOfNodes = numNodes
     if (findProperty("installedPlugins")) {

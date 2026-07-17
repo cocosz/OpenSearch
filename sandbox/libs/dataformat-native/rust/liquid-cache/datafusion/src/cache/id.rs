@@ -136,6 +136,47 @@ impl Deref for BatchID {
     }
 }
 
+/// PageID identifies a physical Parquet page within a column chunk (the 0-based
+/// page index from the OffsetIndex).
+///
+/// EXPERIMENT (lc-page-key): it occupies the *same* 16-bit slot in
+/// [`ParquetArrayID`] as [`BatchID`]. The cache key is granularity-agnostic — a
+/// given cache instance uses exactly one grid (batch OR page), chosen by the
+/// reader — so batch-grid and page-grid entries share a single key space. This
+/// is what allows the DataFusion reader and the codec to key into the same
+/// cache once both use the page grid.
+#[repr(C, align(2))]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct PageID {
+    v: u16,
+}
+
+impl PageID {
+    /// Creates a PageID from a 0-based page index within the column chunk.
+    pub fn from_page_index(page_index: u16) -> Self {
+        Self { v: page_index }
+    }
+
+    /// Creates a PageID from a raw value.
+    pub fn from_raw(v: u16) -> Self {
+        Self { v }
+    }
+
+    /// Increment the page id.
+    pub fn inc(&mut self) {
+        debug_assert!(self.v < u16::MAX);
+        self.v += 1;
+    }
+}
+
+impl Deref for PageID {
+    type Target = u16;
+
+    fn deref(&self) -> &Self::Target {
+        &self.v
+    }
+}
+
 /// Column access path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct ColumnAccessPath {
@@ -172,13 +213,33 @@ impl ColumnAccessPath {
         self.col_id as u64
     }
 
-    /// Get the entry id.
+    /// Get the entry id (batch grid).
     pub fn entry_id(&self, batch_id: BatchID) -> ParquetArrayID {
         ParquetArrayID::new(
             self.file_id_inner(),
             self.row_group_id_inner(),
             self.column_id_inner(),
             batch_id,
+        )
+    }
+
+    /// Get the entry id for a physical page (page grid — lc-page-key experiment).
+    ///
+    /// The page index reuses the same 16-bit slot as the batch id, so a page
+    /// entry and a batch entry with the same numeric value in that slot are
+    /// identical keys. Callers must not mix grids within a single cache
+    /// instance.
+    ///
+    /// The runtime reader keys page entries via the shared `BatchID` slot
+    /// (window index == page index), so this typed helper is currently used to
+    /// document the contract and by tests; kept for the codec-facing API.
+    #[allow(dead_code)]
+    pub fn entry_id_for_page(&self, page_id: PageID) -> ParquetArrayID {
+        ParquetArrayID::new(
+            self.file_id_inner(),
+            self.row_group_id_inner(),
+            self.column_id_inner(),
+            BatchID::from_raw(*page_id),
         )
     }
 }
@@ -196,6 +257,26 @@ impl From<ParquetArrayID> for ColumnAccessPath {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_and_batch_share_the_same_key_slot() {
+        // A page entry and a batch entry with the same numeric slot value must
+        // produce identical cache keys — this is the property that lets the
+        // batch grid and the page grid (and, later, the codec) share one key
+        // space.
+        let path = ColumnAccessPath::new(3, 1, 7);
+        let batch_key: EntryID = path.entry_id(BatchID::from_raw(5)).into();
+        let page_key: EntryID = path.entry_id_for_page(PageID::from_page_index(5)).into();
+        assert_eq!(batch_key, page_key);
+
+        // Different page ids give different keys, and round-trip through the
+        // packed representation preserves file/rg/col.
+        let id = path.entry_id_for_page(PageID::from_page_index(9));
+        assert_eq!(id.file_id_inner(), 3);
+        assert_eq!(id.row_group_id_inner(), 1);
+        assert_eq!(id.column_id_inner(), 7);
+        assert_eq!(id.batch_id_inner(), 9);
+    }
 
     #[test]
     fn test_cache_entry_id_new_and_getters() {

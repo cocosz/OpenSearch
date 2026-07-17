@@ -16,11 +16,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 mod column;
 mod id;
+mod page_map;
 mod stats;
 
 pub use column::{CachedColumn, CachedColumnRef, InsertArrowArrayError};
 pub(crate) use id::ColumnAccessPath;
+#[allow(unused_imports)]
+pub use id::PageID;
 pub use id::{BatchID, ParquetArrayID};
+#[allow(unused_imports)]
+pub use page_map::{ColumnPageMap, PageSpan, column_page_map};
 
 #[derive(Default, Debug)]
 struct ColumnMaps {

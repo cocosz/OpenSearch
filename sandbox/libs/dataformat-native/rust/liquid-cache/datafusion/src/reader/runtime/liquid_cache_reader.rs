@@ -16,10 +16,48 @@ use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
 
-use crate::cache::{BatchID, CachedRowGroupRef};
+use std::collections::HashMap;
+
+use crate::cache::{BatchID, CachedRowGroupRef, ColumnPageMap, PageID, PageSpan};
 use crate::reader::plantime::{LiquidRowFilter, ParquetMetadataCacheReader};
 use crate::reader::runtime::utils::take_next_batch;
 use crate::utils::{boolean_buffer_and_then, row_selector_to_boolean_buffer};
+
+/// Chooses how the reader keys cache entries for a row group.
+///
+/// EXPERIMENT (lc-page-key): with [`CacheGrid::Batch`] each cache entry is keyed
+/// `file | rg | col | batch` (fixed `batch_size` row windows, production
+/// default). With [`CacheGrid::Page`] each cacheable column is cached at
+/// PHYSICAL PAGE granularity on its OWN page grid, keyed `file | rg | col |
+/// page`. The reader still emits fixed `batch_size` output windows; for each
+/// window it gathers, slices and concatenates the overlapping pages of every
+/// column (see `read_from_cache_page`). The set of cached columns is unchanged
+/// from the batch grid — only the granularity differs. Because a cache instance
+/// uses exactly one grid, the two key spaces never collide.
+#[derive(Clone)]
+pub(crate) enum CacheGrid {
+    Batch,
+    Page(Arc<PageGrids>),
+}
+
+/// Per-column physical page layouts for a single row group.
+///
+/// Each column has an independent page layout; a column id maps to its
+/// [`ColumnPageMap`]. Built by the caller from the Parquet OffsetIndex for
+/// every cacheable column.
+pub(crate) struct PageGrids {
+    maps: HashMap<usize, ColumnPageMap>,
+}
+
+impl PageGrids {
+    pub(crate) fn new(maps: HashMap<usize, ColumnPageMap>) -> Self {
+        Self { maps }
+    }
+
+    fn map(&self, column_id: usize) -> Option<&ColumnPageMap> {
+        self.maps.get(&column_id)
+    }
+}
 
 pub(crate) struct LiquidCacheReader {
     state: ReaderState,
@@ -52,9 +90,26 @@ struct LiquidCacheReaderInner {
     selection: VecDeque<RowSelector>,
     schema: SchemaRef,
     batch_size: usize,
+    grid: CacheGrid,
     projection_columns: Vec<usize>,
     parquet_fallback: ParquetFallback,
     last_pull: Option<(BatchID, RecordBatch)>,
+}
+
+impl LiquidCacheReaderInner {
+    /// Number of rows the next output window spans. Both grids emit fixed
+    /// `batch_size` windows; the page grid handles physical pages internally
+    /// when gathering each column (see `read_from_cache_page`). Window index
+    /// `k` therefore always covers absolute rows `[k*batch_size, ...)` within
+    /// the row group.
+    fn next_window_rows(&self) -> Option<usize> {
+        Some(self.batch_size)
+    }
+
+    /// Absolute start row (within the row group) of the current output window.
+    fn window_start_row(&self) -> usize {
+        (*self.current_batch_id as usize) * self.batch_size
+    }
 }
 
 pub(crate) struct LiquidCacheReaderConfig {
@@ -64,6 +119,7 @@ pub(crate) struct LiquidCacheReaderConfig {
     pub(crate) cached_row_group: CachedRowGroupRef,
     pub(crate) projection_columns: Vec<usize>,
     pub(crate) schema: SchemaRef,
+    pub(crate) grid: CacheGrid,
     pub(crate) parquet_fallback: ParquetFallbackConfig,
 }
 
@@ -94,6 +150,7 @@ impl LiquidCacheReader {
     pub(crate) fn new(config: LiquidCacheReaderConfig) -> Self {
         let inner = LiquidCacheReaderInner::new(
             config.batch_size,
+            config.grid.clone(),
             config.selection,
             config.cached_row_group,
             config.projection_columns,
@@ -138,7 +195,11 @@ impl Stream for LiquidCacheReader {
                     }
                 },
                 ReaderState::Ready(mut inner) => {
-                    match take_next_batch(&mut inner.selection, inner.batch_size) {
+                    // Window size is grid-driven: fixed batch_size for the batch
+                    // grid, or the current page's row count for the page grid
+                    // (window index == page index).
+                    let window_rows = inner.next_window_rows();
+                    match window_rows.and_then(|rows| take_next_batch(&mut inner.selection, rows)) {
                         Some(selection) => {
                             let inner = *inner;
                             let future = inner.next_batch(self.row_filter.take(), selection);
@@ -176,6 +237,8 @@ impl ParquetFallback {
     }
 
     async fn fetch_batch(&mut self, batch_id: BatchID) -> Result<RecordBatch, ParquetError> {
+        // Batch grid only. The page grid never reaches here — it reads per
+        // column via `fetch_column_page` from `read_from_cache_page`.
         if self.stream.is_none() || batch_id != self.next_batch_id {
             self.rebuild_stream(batch_id)?;
         }
@@ -191,6 +254,43 @@ impl ParquetFallback {
         self.next_batch_id = batch_id;
         self.next_batch_id.inc();
         Ok(record_batch)
+    }
+
+    /// Reads exactly one physical page of a SINGLE column (page grid).
+    /// One-shot read of the page's `[first_row, first_row+row_count)` range with
+    /// a single-column projection, returning that column's page array.
+    async fn fetch_column_page(
+        &mut self,
+        column_id: usize,
+        span: PageSpan,
+    ) -> Result<ArrayRef, ParquetError> {
+        let schema_descr = self.metadata.file_metadata().schema_descr();
+        let projection = ProjectionMask::roots(schema_descr, [column_id]);
+        let reader_metadata =
+            ArrowReaderMetadata::try_new(Arc::clone(&self.metadata), ArrowReaderOptions::new())?;
+
+        let mut selectors = Vec::with_capacity(2);
+        if span.first_row > 0 {
+            selectors.push(RowSelector::skip(span.first_row));
+        }
+        selectors.push(RowSelector::select(span.row_count));
+        let row_selection = RowSelection::from(selectors);
+
+        let mut stream =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(self.input.clone(), reader_metadata)
+                .with_projection(projection)
+                .with_row_groups(vec![self.row_group_idx])
+                .with_batch_size(span.row_count.max(1))
+                .with_row_selection(row_selection)
+                .build()?;
+
+        let batch = stream.next().await.transpose()?.ok_or_else(|| {
+            ParquetError::General(format!(
+                "parquet page read empty for col {column_id} at row {}",
+                span.first_row
+            ))
+        })?;
+        Ok(Arc::clone(batch.column(0)))
     }
 
     fn rebuild_stream(&mut self, batch_id: BatchID) -> Result<(), ParquetError> {
@@ -243,6 +343,7 @@ fn build_row_selection_from(
 impl LiquidCacheReaderInner {
     fn new(
         batch_size: usize,
+        grid: CacheGrid,
         selection: RowSelection,
         cached_row_group: CachedRowGroupRef,
         projection_columns: Vec<usize>,
@@ -255,6 +356,7 @@ impl LiquidCacheReaderInner {
             selection: selection.into(),
             schema,
             batch_size,
+            grid,
             projection_columns,
             parquet_fallback,
             last_pull: None,
@@ -300,6 +402,14 @@ impl LiquidCacheReaderInner {
         row_filter: &mut Option<LiquidRowFilter>,
         selection: Vec<RowSelector>,
     ) -> Result<BooleanBuffer, ArrowError> {
+        // Page grid: evaluate predicates on page-materialized columns.
+        if let CacheGrid::Page(grids) = &self.grid {
+            let grids = Arc::clone(grids);
+            return self
+                .build_predicate_filter_page(&grids, row_filter, selection)
+                .await;
+        }
+
         let mut input_selection = row_selector_to_boolean_buffer(&selection);
 
         let Some(filter) = row_filter.as_mut() else {
@@ -339,6 +449,12 @@ impl LiquidCacheReaderInner {
         &mut self,
         selection: &BooleanBuffer,
     ) -> Result<Option<RecordBatch>, ArrowError> {
+        // Page grid: gather each column from its own physical pages.
+        if let CacheGrid::Page(grids) = &self.grid {
+            let grids = Arc::clone(grids);
+            return self.read_from_cache_page(&grids, selection).await;
+        }
+
         let selected_rows = selection.count_set_bits();
         if selected_rows == 0 {
             return Ok(None);
@@ -422,6 +538,206 @@ impl LiquidCacheReaderInner {
             self.schema.clone(),
             final_arrays,
         )?))
+    }
+
+    /// Page grid: build the current window's output batch by gathering each
+    /// projected column from its own physical pages.
+    async fn read_from_cache_page(
+        &mut self,
+        grids: &PageGrids,
+        selection: &BooleanBuffer,
+    ) -> Result<Option<RecordBatch>, ArrowError> {
+        let selected_rows = selection.count_set_bits();
+        if selected_rows == 0 {
+            return Ok(None);
+        }
+
+        let window_start = self.window_start_row();
+        let window_end = window_start + selection.len();
+
+        log::debug!(
+            "[LC-PageGrid] read window=[{window_start},{window_end}) selected={selected_rows} projected_cols={:?}",
+            self.projection_columns
+        );
+
+        if self.projection_columns.is_empty() {
+            let options = RecordBatchOptions::new().with_row_count(Some(selected_rows));
+            let batch =
+                RecordBatch::try_new_with_options(self.schema.clone(), Vec::new(), &options)?;
+            return Ok(Some(batch));
+        }
+
+        let mut arrays = Vec::with_capacity(self.projection_columns.len());
+        for i in 0..self.projection_columns.len() {
+            let col_id = self.projection_columns[i];
+            let full = if grids.map(col_id).is_some() {
+                // Cacheable column → gather from its physical pages (cache).
+                self.column_window_array_page(grids, col_id, window_start, window_end)
+                    .await?
+            } else {
+                // Not a cached column (e.g. projected-but-not-predicate). Read
+                // its window from parquet without caching — same as the batch
+                // path leaves non-predicate columns uncached.
+                let span = PageSpan {
+                    page_id: 0,
+                    first_row: window_start,
+                    row_count: window_end - window_start,
+                };
+                self.parquet_fallback
+                    .fetch_column_page(col_id, span)
+                    .await
+                    .map_err(|e| {
+                        ArrowError::ComputeError(format!(
+                            "window read failed for col {col_id}: {e}"
+                        ))
+                    })?
+            };
+            arrays.push(filter_array(full, selection)?);
+        }
+        Ok(Some(RecordBatch::try_new(self.schema.clone(), arrays)?))
+    }
+
+    /// Page grid: evaluate the row filter against page-materialized
+    /// predicate columns, ANDing each result into the base selection. Columns
+    /// are materialized for the window then filtered to the currently selected
+    /// rows — mirroring the batch-grid materialize path.
+    async fn build_predicate_filter_page(
+        &mut self,
+        grids: &PageGrids,
+        row_filter: &mut Option<LiquidRowFilter>,
+        selection: Vec<RowSelector>,
+    ) -> Result<BooleanBuffer, ArrowError> {
+        let mut input_selection = row_selector_to_boolean_buffer(&selection);
+
+        let Some(filter) = row_filter.as_mut() else {
+            return Ok(input_selection);
+        };
+
+        let window_start = self.window_start_row();
+        let window_end = window_start + input_selection.len();
+
+        let num_predicates = filter.predicates_mut().len();
+        for p_idx in 0..num_predicates {
+            if input_selection.count_set_bits() == 0 {
+                break;
+            }
+
+            // Scope the immutable borrow so it is not held across the awaits.
+            let column_ids: Vec<usize> = filter.predicates_mut()[p_idx].predicate_column_ids();
+
+            let mut arrays = Vec::with_capacity(column_ids.len());
+            let mut fields = Vec::with_capacity(column_ids.len());
+            for col_id in &column_ids {
+                let full = self
+                    .column_window_array_page(grids, *col_id, window_start, window_end)
+                    .await?;
+                arrays.push(filter_array(full, &input_selection)?);
+                let field = self
+                    .cached_row_group
+                    .get_column(*col_id as u64)
+                    .ok_or_else(|| {
+                        ArrowError::ComputeError(format!(
+                            "column {col_id} not present in liquid cache"
+                        ))
+                    })?
+                    .field()
+                    .as_ref()
+                    .clone();
+                fields.push(field);
+            }
+
+            let schema = Arc::new(Schema::new(fields));
+            let predicate_batch = if arrays.is_empty() {
+                let options = RecordBatchOptions::new()
+                    .with_row_count(Some(input_selection.count_set_bits()));
+                RecordBatch::try_new_with_options(schema, arrays, &options)?
+            } else {
+                RecordBatch::try_new(schema, arrays)?
+            };
+
+            let boolean_array = filter.predicates_mut()[p_idx].evaluate(predicate_batch)?;
+            let boolean_mask = if boolean_array.null_count() == 0 {
+                boolean_array.into_parts().0
+            } else {
+                prep_null_mask_filter(&boolean_array).into_parts().0
+            };
+            input_selection = boolean_buffer_and_then(&input_selection, &boolean_mask);
+        }
+
+        Ok(input_selection)
+    }
+
+    /// Page grid: return column `column_id`'s values for the absolute
+    /// row range `[start, end)` by gathering its overlapping physical pages from
+    /// cache (filling misses from parquet, one page at a time), slicing each to
+    /// the range, and concatenating.
+    async fn column_window_array_page(
+        &mut self,
+        grids: &PageGrids,
+        column_id: usize,
+        start: usize,
+        end: usize,
+    ) -> Result<ArrayRef, ArrowError> {
+        let map = grids.map(column_id).ok_or_else(|| {
+            ArrowError::ComputeError(format!("no page map for column {column_id}"))
+        })?;
+        let column = self
+            .cached_row_group
+            .get_column(column_id as u64)
+            .ok_or_else(|| {
+                ArrowError::ComputeError(format!("column {column_id} not present in liquid cache"))
+            })?;
+
+        let first_page = map.page_of_row(start).ok_or_else(|| {
+            ArrowError::ComputeError(format!("row {start} out of range for column {column_id}"))
+        })?;
+        let last_page = map.page_of_row(end - 1).ok_or_else(|| {
+            ArrowError::ComputeError(format!(
+                "row {} out of range for column {column_id}",
+                end - 1
+            ))
+        })?;
+
+        let mut parts: Vec<ArrayRef> = Vec::new();
+        let mut hits = 0usize;
+        let mut misses = 0usize;
+        for page_id in first_page..=last_page {
+            let span = map.span(page_id).expect("page id in range");
+            let page_array = match column.get_page(PageID::from_raw(page_id)) {
+                Some(array) => {
+                    hits += 1;
+                    array
+                }
+                None => {
+                    misses += 1;
+                    let array = self
+                        .parquet_fallback
+                        .fetch_column_page(column_id, span)
+                        .await
+                        .map_err(|e| {
+                            ArrowError::ComputeError(format!(
+                                "page fetch failed for col {column_id}: {e}"
+                            ))
+                        })?;
+                    let _ = column.insert_page(PageID::from_raw(page_id), Arc::clone(&array));
+                    array
+                }
+            };
+            // Slice the page to its intersection with [start, end).
+            let seg_start = start.max(span.first_row) - span.first_row;
+            let seg_end = end.min(span.end_row()) - span.first_row;
+            parts.push(page_array.slice(seg_start, seg_end - seg_start));
+        }
+
+        log::debug!(
+            "[LC-PageGrid] col={column_id} window=[{start},{end}) pages=[{first_page}..={last_page}] hits={hits} misses={misses}"
+        );
+
+        if parts.len() == 1 {
+            return Ok(parts.into_iter().next().unwrap());
+        }
+        let refs: Vec<&dyn Array> = parts.iter().map(|a| a.as_ref()).collect();
+        Ok(arrow::compute::concat(&refs)?)
     }
 
     async fn read_parquet_batch_and_fill_cache(
@@ -583,6 +899,11 @@ mod tests {
 
     impl TestRowGroup {
         fn reader(&self, request: ReaderRequest) -> LiquidCacheReader {
+            self.reader_with_grid(request, CacheGrid::Batch)
+        }
+
+        fn reader_with_grid(&self, request: ReaderRequest, grid: CacheGrid) -> LiquidCacheReader {
+            let fallback = self.fallback.clone();
             LiquidCacheReader::new(LiquidCacheReaderConfig {
                 batch_size: self.batch_size,
                 selection: request.selection,
@@ -590,7 +911,8 @@ mod tests {
                 cached_row_group: Arc::clone(&self.row_group),
                 projection_columns: request.projection_columns,
                 schema: request.schema,
-                parquet_fallback: self.fallback.clone(),
+                grid,
+                parquet_fallback: fallback,
             })
         }
     }
@@ -666,6 +988,391 @@ mod tests {
 
     fn flatten_batches(batches: &[Vec<i32>]) -> Vec<i32> {
         batches.iter().flat_map(|b| b.iter().copied()).collect()
+    }
+
+    /// Writes a single-column, single-row-group parquet file with a page index
+    /// and a small data-page row-count limit (so the writer emits multiple
+    /// pages), and returns a TestRowGroup with an EMPTY cache plus the column's
+    /// page spans. Used to exercise the page grid via the miss/fallback path.
+    async fn make_paged_row_group(
+        page_row_limit: usize,
+        values: Vec<i32>,
+    ) -> (TestRowGroup, Vec<PageSpan>) {
+        use parquet::file::metadata::PageIndexPolicy;
+        use parquet::file::properties::{EnabledStatistics, WriterProperties};
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let field = Arc::new(Field::new("col0", DataType::Int32, false));
+        let schema = Arc::new(Schema::new(vec![field.clone()]));
+        let parquet_path = tmp_dir.path().join("data.parquet");
+        let file = File::create(&parquet_path).unwrap();
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_data_page_row_count_limit(page_row_limit)
+            .set_write_batch_size(page_row_limit)
+            .build();
+        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
+        let array: ArrayRef = Arc::new(Int32Array::from(values.clone()));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array]).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let metadata_file = File::open(&parquet_path).unwrap();
+        let reader_metadata = ArrowReaderMetadata::load(
+            &metadata_file,
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional),
+        )
+        .unwrap();
+        let object_store = Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path()).unwrap());
+        let partitioned_file = PartitionedFile::new(
+            "data.parquet",
+            std::fs::metadata(&parquet_path).unwrap().len(),
+        );
+        let metrics = ExecutionPlanMetricsSet::new();
+        let input = CachedMetaReaderFactory::new(object_store).create_liquid_reader(
+            0,
+            partitioned_file,
+            None,
+            &metrics,
+        );
+        let projection = ProjectionMask::roots(
+            reader_metadata.metadata().file_metadata().schema_descr(),
+            [0],
+        );
+
+        // Cache batch_size is irrelevant to the page grid (entries are keyed by
+        // page); usize::MAX memory disables eviction/transcode for the test.
+        let cache = LiquidCacheParquet::new(
+            8192,
+            usize::MAX,
+            Box::new(LiquidPolicy::new()),
+            Box::new(TranscodeEvict),
+        );
+        let file = cache.register_or_get_file("test".to_string(), schema.clone());
+        // col0 marked predicate → cacheable. Cache left EMPTY (no prefill), so
+        // reads go through the page fallback path.
+        let row_group = file.create_row_group(0, vec![0]);
+
+        let spans = crate::cache::column_page_map(reader_metadata.metadata(), 0, 0)
+            .expect("page index present")
+            .spans()
+            .to_vec();
+
+        let test = TestRowGroup {
+            batch_size: 8,
+            row_group,
+            schema,
+            fallback: ParquetFallbackConfig {
+                row_group_idx: 0,
+                metadata: Arc::clone(reader_metadata.metadata()),
+                input,
+                cache_projection: projection,
+                cache_column_ids: vec![0],
+                cache_batch_size: 8,
+                row_count: values.len(),
+            },
+            _tmp_dir: tmp_dir,
+        };
+        (test, spans)
+    }
+
+    /// Build a single-column (col 0) page grid from spans.
+    fn single_col_page_grid(spans: Vec<PageSpan>) -> CacheGrid {
+        let mut maps = HashMap::new();
+        maps.insert(0usize, ColumnPageMap::from_spans(spans));
+        CacheGrid::Page(Arc::new(PageGrids::new(maps)))
+    }
+
+    /// Page grid: reading across multiple physical pages must return exactly the
+    /// written values, in order — proving the page gather + page fetch + emit
+    /// path is correct.
+    #[tokio::test]
+    async fn page_grid_reads_match_written_data() {
+        let values: Vec<i32> = (0..10).collect();
+        let (test, spans) = make_paged_row_group(4, values.clone()).await;
+        assert!(
+            spans.len() >= 2,
+            "expected multiple pages, got {}",
+            spans.len()
+        );
+
+        let selection = RowSelection::from(vec![RowSelector::select(values.len())]);
+        let reader = test.reader_with_grid(
+            ReaderRequest {
+                selection,
+                row_filter: None,
+                projection_columns: vec![0],
+                schema: Arc::clone(&test.schema),
+            },
+            single_col_page_grid(spans),
+        );
+
+        let batches = collect_batches(reader);
+        let got: Vec<i32> = batches.iter().flat_map(as_i32_values).collect();
+        assert_eq!(got, values);
+    }
+
+    /// Page grid, cache-hit path: pre-fill one entry per physical page (keyed by
+    /// page index via the shared BatchID slot), then read. Every row must be
+    /// served from cache and equal the written data — proving the page-keyed
+    /// insert→get round-trip and that cached == uncached.
+    #[tokio::test]
+    async fn page_grid_served_from_prefilled_cache() {
+        let values: Vec<i32> = (0..10).collect();
+        let (test, spans) = make_paged_row_group(4, values.clone()).await;
+        assert!(spans.len() >= 2);
+
+        // Pre-fill the cache: one array per page, keyed by page index (== the
+        // BatchID slot value the page grid uses).
+        let column = test.row_group.get_column(0).unwrap();
+        for span in &spans {
+            let page_values = values[span.first_row..span.first_row + span.row_count].to_vec();
+            let array: ArrayRef = Arc::new(Int32Array::from(page_values));
+            column
+                .insert_page(PageID::from_raw(span.page_id), array)
+                .expect("page insert");
+        }
+
+        let selection = RowSelection::from(vec![RowSelector::select(values.len())]);
+        let reader = test.reader_with_grid(
+            ReaderRequest {
+                selection,
+                row_filter: None,
+                projection_columns: vec![0],
+                schema: Arc::clone(&test.schema),
+            },
+            single_col_page_grid(spans),
+        );
+
+        let batches = collect_batches(reader);
+        let got: Vec<i32> = batches.iter().flat_map(as_i32_values).collect();
+        assert_eq!(got, values);
+    }
+
+    /// Page grid must honour row selection (skips) the same as the batch grid.
+    #[tokio::test]
+    async fn page_grid_respects_selection() {
+        let values: Vec<i32> = (0..10).collect();
+        let (test, spans) = make_paged_row_group(4, values.clone()).await;
+
+        // Skip first 3, select next 5 (rows 3..8), spanning a page boundary.
+        let selection = RowSelection::from(vec![RowSelector::skip(3), RowSelector::select(5)]);
+        let reader = test.reader_with_grid(
+            ReaderRequest {
+                selection,
+                row_filter: None,
+                projection_columns: vec![0],
+                schema: Arc::clone(&test.schema),
+            },
+            single_col_page_grid(spans),
+        );
+
+        let batches = collect_batches(reader);
+        let got: Vec<i32> = batches.iter().flat_map(as_i32_values).collect();
+        assert_eq!(got, vec![3, 4, 5, 6, 7]);
+    }
+
+    /// Writes a TWO-column parquet file (col0, col1), no prefill, and returns a
+    /// TestRowGroup with both columns cacheable. Used to exercise the
+    /// per-column independent page grids.
+    async fn make_two_col_row_group(col0: Vec<i32>, col1: Vec<i32>) -> TestRowGroup {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col0", DataType::Int32, false),
+            Field::new("col1", DataType::Int32, false),
+        ]));
+        let parquet_path = tmp_dir.path().join("data.parquet");
+        let file = File::create(&parquet_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None).unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(col0.clone())) as ArrayRef,
+                Arc::new(Int32Array::from(col1.clone())) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let metadata_file = File::open(&parquet_path).unwrap();
+        let reader_metadata =
+            ArrowReaderMetadata::load(&metadata_file, ArrowReaderOptions::new()).unwrap();
+        let object_store = Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path()).unwrap());
+        let partitioned_file = PartitionedFile::new(
+            "data.parquet",
+            std::fs::metadata(&parquet_path).unwrap().len(),
+        );
+        let metrics = ExecutionPlanMetricsSet::new();
+        let input = CachedMetaReaderFactory::new(object_store).create_liquid_reader(
+            0,
+            partitioned_file,
+            None,
+            &metrics,
+        );
+        let projection = ProjectionMask::roots(
+            reader_metadata.metadata().file_metadata().schema_descr(),
+            [0, 1],
+        );
+
+        let cache = LiquidCacheParquet::new(
+            8192,
+            usize::MAX,
+            Box::new(LiquidPolicy::new()),
+            Box::new(TranscodeEvict),
+        );
+        let file = cache.register_or_get_file("test".to_string(), schema.clone());
+        // Both columns cacheable (page grid caches all projected columns).
+        let row_group = file.create_row_group(0, vec![0, 1]);
+
+        TestRowGroup {
+            batch_size: 8,
+            row_group,
+            schema,
+            fallback: ParquetFallbackConfig {
+                row_group_idx: 0,
+                metadata: Arc::clone(reader_metadata.metadata()),
+                input,
+                cache_projection: projection,
+                cache_column_ids: vec![0, 1],
+                cache_batch_size: 8,
+                row_count: col0.len(),
+            },
+            _tmp_dir: tmp_dir,
+        }
+    }
+
+    /// Per-column layout differentiator: two columns with DIFFERENT per-column
+    /// page layouts must both read correctly. col0 pages break at 4/8; col1 pages
+    /// break at 3/7 — misaligned. The reader gathers each column from its own
+    /// pages and re-aligns to the output window.
+    #[tokio::test]
+    async fn page_grid_two_columns_different_layouts() {
+        let col0: Vec<i32> = (0..10).collect();
+        let col1: Vec<i32> = (100..110).collect();
+        let test = make_two_col_row_group(col0.clone(), col1.clone()).await;
+
+        // Distinct synthetic page layouts per column (both tile [0,10)).
+        let col0_spans = vec![
+            PageSpan {
+                page_id: 0,
+                first_row: 0,
+                row_count: 4,
+            },
+            PageSpan {
+                page_id: 1,
+                first_row: 4,
+                row_count: 4,
+            },
+            PageSpan {
+                page_id: 2,
+                first_row: 8,
+                row_count: 2,
+            },
+        ];
+        let col1_spans = vec![
+            PageSpan {
+                page_id: 0,
+                first_row: 0,
+                row_count: 3,
+            },
+            PageSpan {
+                page_id: 1,
+                first_row: 3,
+                row_count: 4,
+            },
+            PageSpan {
+                page_id: 2,
+                first_row: 7,
+                row_count: 3,
+            },
+        ];
+        let mut maps = HashMap::new();
+        maps.insert(0usize, ColumnPageMap::from_spans(col0_spans));
+        maps.insert(1usize, ColumnPageMap::from_spans(col1_spans));
+        let grid = CacheGrid::Page(Arc::new(PageGrids::new(maps)));
+
+        let selection = RowSelection::from(vec![RowSelector::select(10)]);
+        let reader = test.reader_with_grid(
+            ReaderRequest {
+                selection,
+                row_filter: None,
+                projection_columns: vec![0, 1],
+                schema: Arc::clone(&test.schema),
+            },
+            grid,
+        );
+
+        let batches = collect_batches(reader);
+        let mut got0 = Vec::new();
+        let mut got1 = Vec::new();
+        for b in &batches {
+            let a0 = b.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+            let a1 = b.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
+            got0.extend(a0.iter().map(|v| v.unwrap()));
+            got1.extend(a1.iter().map(|v| v.unwrap()));
+        }
+        assert_eq!(got0, col0);
+        assert_eq!(got1, col1);
+    }
+
+    /// Page grid with a MIXED projection: col0 is cacheable (in the grid), col1
+    /// is projected but NOT cached (absent from the grid) — col1 must be read
+    /// straight from parquet, mirroring today's behaviour where non-predicate
+    /// projected columns are not cached.
+    #[tokio::test]
+    async fn page_grid_reads_uncached_projected_column_from_parquet() {
+        let col0: Vec<i32> = (0..10).collect();
+        let col1: Vec<i32> = (100..110).collect();
+        let test = make_two_col_row_group(col0.clone(), col1.clone()).await;
+
+        // Only col0 has a page layout → only col0 is page-cached; col1 falls
+        // through to the parquet window read.
+        let mut maps = HashMap::new();
+        maps.insert(
+            0usize,
+            ColumnPageMap::from_spans(vec![
+                PageSpan {
+                    page_id: 0,
+                    first_row: 0,
+                    row_count: 4,
+                },
+                PageSpan {
+                    page_id: 1,
+                    first_row: 4,
+                    row_count: 4,
+                },
+                PageSpan {
+                    page_id: 2,
+                    first_row: 8,
+                    row_count: 2,
+                },
+            ]),
+        );
+        let grid = CacheGrid::Page(Arc::new(PageGrids::new(maps)));
+
+        let selection = RowSelection::from(vec![RowSelector::select(10)]);
+        let reader = test.reader_with_grid(
+            ReaderRequest {
+                selection,
+                row_filter: None,
+                projection_columns: vec![0, 1],
+                schema: Arc::clone(&test.schema),
+            },
+            grid,
+        );
+
+        let batches = collect_batches(reader);
+        let mut got0 = Vec::new();
+        let mut got1 = Vec::new();
+        for b in &batches {
+            let a0 = b.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+            let a1 = b.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
+            got0.extend(a0.iter().map(|v| v.unwrap()));
+            got1.extend(a1.iter().map(|v| v.unwrap()));
+        }
+        assert_eq!(got0, col0);
+        assert_eq!(got1, col1);
     }
 
     fn collect_batches(reader: LiquidCacheReader) -> Vec<RecordBatch> {
