@@ -97,9 +97,9 @@ base64 = "0.22"
 
 # Liquid Cache (optional): in-memory decoded-batch cache for parquet scans.
 # Off by default and only compiled in when the `liquid_cache` feature is enabled
-# (Gradle -PliquidCache). The crate re-exports everything needed, including its
-# datafusion pieces, so this single optional dependency is enough.
-opensearch-liquid-cache = { path = "../../liquid-cache/src/main/rust", optional = true }
+# (Gradle -PliquidCache). Sourced as a git dependency (the crate re-exports
+# everything needed, including its datafusion pieces), so nothing is vendored here.
+opensearch-liquid-cache = { git = "https://github.com/cocosz/liquid-cache", branch = "opensearch-liquid-cache-plugin", optional = true }
 
 [features]
 # Off by default. When on, liquid cache is compiled in and the hook in

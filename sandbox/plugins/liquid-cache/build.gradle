@@ -40,54 +40,10 @@ test {
   dependsOn ':sandbox:libs:dataformat-native:buildRustLibrary'
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Rust unit tests for the liquid-cache crates (core + datafusion + glue).
-// Run as part of `check` so `./gradlew check` exercises them.
-// ═══════════════════════════════════════════════════════════════════
-// Liquid cache is its own standalone Cargo workspace (not part of the shared
-// dataformat-native workspace). The toolchain is pinned via rust-toolchain.toml
-// in the crate root.
-def rustWorkspaceDir = file("${projectDir}/src/main/rust")
-
-task cargoTest(type: Exec) {
-  description = 'Run Rust unit tests for the liquid-cache crates'
-  group = 'verification'
-  workingDir rustWorkspaceDir
-
-  def cargoExecutable = 'cargo'
-  def possibleCargoPaths = [
-    System.getenv('HOME') + '/.cargo/bin/cargo',
-    '/usr/local/bin/cargo',
-    'cargo'
-  ]
-  for (String path : possibleCargoPaths) {
-    if (new File(path).exists()) { cargoExecutable = path; break }
-  }
-
-  // datafusion-substrait's build script needs protoc; ensure Homebrew bin is on PATH.
-  def protoc = ['/opt/homebrew/bin/protoc', '/usr/local/bin/protoc'].find { new File(it).exists() }
-  if (protoc != null) {
-    environment 'PROTOC', protoc
-    environment 'PATH', new File(protoc).parent + File.pathSeparator + System.getenv('PATH')
-  }
-
-  commandLine cargoExecutable, 'test',
-    '-p', 'opensearch-liquid-cache-core',
-    '-p', 'opensearch-liquid-cache-datafusion',
-    '-p', 'opensearch-liquid-cache',
-    '--lib'
-
-  inputs.files fileTree("${projectDir}/src/main/rust/src")
-  inputs.files fileTree("${projectDir}/src/main/rust/core/src")
-  inputs.files fileTree("${projectDir}/src/main/rust/datafusion/src")
-  outputs.file "${projectDir}/src/main/rust/target/gradle-cargoTest.stamp"
-  doLast {
-    file("${projectDir}/src/main/rust/target").mkdirs()
-    file("${projectDir}/src/main/rust/target/gradle-cargoTest.stamp").text = new Date().toString()
-  }
-}
-
-check.dependsOn cargoTest
+// The liquid-cache native crates are sourced as a git dependency (see the
+// opensearch-liquid-cache entry in analytics-backend-datafusion/rust/Cargo.toml)
+// and unit-tested in their upstream repository, so there is no local Cargo
+// workspace or cargoTest task here.
 
 // Liquid cache is compiled INTO the shared analytics engine native library when
 // that library is built with -PliquidCache (see dataformat-native/build.gradle).
