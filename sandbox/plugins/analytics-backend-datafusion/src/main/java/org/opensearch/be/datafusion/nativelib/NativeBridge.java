@@ -149,6 +149,7 @@ public final class NativeBridge {
     private static final MethodHandle SET_LIQUID_CACHE_DISK_LIMIT;
     private static final MethodHandle SET_LIQUID_CACHE_SELECTIVITY_THRESHOLD;
     private static final MethodHandle SET_LIQUID_CACHE_MAX_COLUMNS;
+    private static final MethodHandle LIQUID_CACHE_STATS;
     private static final MethodHandle STATS;
     private static final MethodHandle QUERY_REGISTRY_TOP_N_BY_CURRENT;
     private static final MethodHandle DF_NATIVE_NODE_STATS;
@@ -224,6 +225,11 @@ public final class NativeBridge {
         SET_LIQUID_CACHE_MAX_COLUMNS = linker.downcallHandle(
             lib.find("df_set_liquid_cache_max_columns").orElseThrow(),
             FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        LIQUID_CACHE_STATS = linker.downcallHandle(
+            lib.find("df_liquid_cache_stats").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS)
         );
 
         GET_MEMORY_POOL_USAGE = linker.downcallHandle(
@@ -832,6 +838,33 @@ public final class NativeBridge {
     /** Clears all Liquid Cache entries and DataFusion internal caches. */
     public static void clearLiquidCache(long runtimePtr) {
         NativeCall.invokeVoid(CLEAR_LIQUID_CACHE, runtimePtr);
+    }
+
+    /** Number of i64 counters returned by {@link #liquidCacheStats()}. Must match the Rust FFI. */
+    public static final int LIQUID_CACHE_STAT_FIELDS = 12;
+
+    /**
+     * Reads Liquid Cache counters in a single FFM call. Field order (see the Rust
+     * {@code LiquidOnlyRuntime::stats_for_ffi}):
+     * [cache_hit, cache_miss, predicate_evals, total_entries, memory_usage_bytes,
+     *  max_memory_bytes, disk_usage_bytes, max_disk_bytes, memory_arrow_entries,
+     *  memory_liquid_entries, disk_evictions, squeeze_io_saved].
+     * Returns all-zeros when the runtime isn't initialized or on error.
+     */
+    public static long[] liquidCacheStats() {
+        long[] out = new long[LIQUID_CACHE_STAT_FIELDS];
+        try (var arena = Arena.ofConfined()) {
+            var buf = arena.allocate(ValueLayout.JAVA_LONG, LIQUID_CACHE_STAT_FIELDS);
+            long n = (long) LIQUID_CACHE_STATS.invokeExact(buf);
+            int count = (int) Math.min(Math.max(n, 0), LIQUID_CACHE_STAT_FIELDS);
+            for (int i = 0; i < count; i++) {
+                out[i] = buf.getAtIndex(ValueLayout.JAVA_LONG, i);
+            }
+            return out;
+        } catch (Throwable t) {
+            logger.debug("Failed to read liquid cache stats", t);
+            return out;
+        }
     }
 
     /** Dynamically enable or disable Liquid Cache for new queries. */
