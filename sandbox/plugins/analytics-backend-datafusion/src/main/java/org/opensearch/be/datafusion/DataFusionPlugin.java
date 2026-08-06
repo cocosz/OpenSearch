@@ -17,6 +17,7 @@ import org.opensearch.arrow.allocator.ArrowNativeAllocator;
 import org.opensearch.arrow.spi.NativeAllocator;
 import org.opensearch.arrow.spi.PoolGroup;
 import org.opensearch.be.datafusion.action.LiquidCacheClearAction;
+import org.opensearch.be.datafusion.action.LiquidCacheStatsAction;
 import org.opensearch.be.datafusion.action.stats.DataFusionStatsActionType;
 import org.opensearch.be.datafusion.action.stats.RestDataFusionStatsAction;
 import org.opensearch.be.datafusion.action.stats.TransportDataFusionStatsAction;
@@ -1022,7 +1023,12 @@ public class DataFusionPlugin extends Plugin
             return Collections.emptyList();
         }
         if (FeatureFlags.isEnabled(FeatureFlags.LIQUID_CACHE_EXPERIMENTAL_SETTING)) {
-            return List.of(new RestDataFusionStatsAction(), new org.opensearch.be.datafusion.action.stats.RestClearCacheAction(), new LiquidCacheClearAction(dataFusionService));
+            return List.of(
+                new RestDataFusionStatsAction(),
+                new org.opensearch.be.datafusion.action.stats.RestClearCacheAction(),
+                new LiquidCacheClearAction(dataFusionService),
+                new LiquidCacheStatsAction(dataFusionService)
+            );
         }
         return List.of(new RestDataFusionStatsAction(), new org.opensearch.be.datafusion.action.stats.RestClearCacheAction());
     }

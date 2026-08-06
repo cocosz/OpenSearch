@@ -47,6 +47,7 @@ public class LiquidCacheIT extends AnalyticsRestTestCase {
         setupIndex();
 
         verifyQueryReturnsExpectedResult();
+        verifyStatsEndpoint();
         verifyDynamicDisableAndReenable();
         verifyDynamicBudgetResize();
     }
@@ -58,6 +59,36 @@ public class LiquidCacheIT extends AnalyticsRestTestCase {
             EXPECTED_SUM_AGE_GT_25
         );
         logger.info("Query latency: {}ms", latency);
+    }
+
+    private void verifyStatsEndpoint() throws Exception {
+        Response response = client().performRequest(
+            new Request("GET", "/_plugins/analytics_backend_datafusion/liquid_cache/stats")
+        );
+        assertEquals(200, response.getStatusLine().getStatusCode());
+        Map<String, Object> stats = entityAsMap(response);
+        List<String> expectedFields = List.of(
+            "cache_hits",
+            "cache_misses",
+            "predicate_evals",
+            "total_entries",
+            "memory_usage_bytes",
+            "max_memory_bytes",
+            "disk_usage_bytes",
+            "max_disk_bytes",
+            "memory_arrow_entries",
+            "memory_liquid_entries",
+            "disk_evictions",
+            "squeeze_io_saved"
+        );
+        for (String field : expectedFields) {
+            assertNotNull("Liquid cache stats missing field: " + field, stats.get(field));
+        }
+        assertTrue(
+            "total_entries should be non-negative",
+            ((Number) stats.get("total_entries")).longValue() >= 0
+        );
+        logger.info("Liquid cache stats: {}", stats);
     }
 
     private void verifyDynamicDisableAndReenable() throws Exception {

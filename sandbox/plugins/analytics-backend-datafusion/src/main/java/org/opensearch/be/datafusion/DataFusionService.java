@@ -314,6 +314,15 @@ public class DataFusionService extends AbstractLifecycleComponent {
         NativeBridge.clearLiquidCache(getNativeRuntime().get());
     }
 
+    /**
+     * Returns a snapshot of Liquid Cache counters, or all-zeros when the cache
+     * runtime isn't initialized. Field order matches
+     * {@link org.opensearch.be.datafusion.nativelib.NativeBridge#liquidCacheStats()}.
+     */
+    public long[] getLiquidCacheStats() {
+        return NativeBridge.liquidCacheStats();
+    }
+
     private void releaseRuntime() {
         NativeRuntimeHandle handle = runtimeHandle;
         if (handle != null) {

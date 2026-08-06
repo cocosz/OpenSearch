@@ -23,6 +23,10 @@ use liquid_cache_datafusion_local::{
 use native_bridge_common::log_debug;
 
 const LOCAL_MODE_OPTIMIZER_NAME: &str = "LocalModeLiquidCacheOptimizer";
+
+/// Number of i64 counters written by [`LiquidOnlyRuntime::stats_for_ffi`] and
+/// the `df_liquid_cache_stats` FFI. Must stay in sync with the Java decoder.
+pub const LIQUID_CACHE_STAT_FIELDS: usize = 12;
 const EVICTION_POLICY_LRU: &str = "lru";
 const CACHE_DIR_PREFIX: &str = "node_";
 
@@ -186,6 +190,32 @@ impl LiquidOnlyRuntime {
             s.runtime.disk_evictions, s.runtime.squeeze_io_saved,
             mem_pct,
         );
+    }
+
+    /// Snapshot of key cache counters for the stats FFI. Field order MUST match
+    /// the Java decoder in `NativeBridge.liquidCacheStats()` /
+    /// `LiquidCacheStatsAction`.
+    pub fn stats_for_ffi(&self) -> [i64; LIQUID_CACHE_STAT_FIELDS] {
+        let s = self.storage.stats();
+        [
+            s.runtime.cache_hit as i64,        // 0
+            s.runtime.cache_miss as i64,       // 1
+            s.runtime.eval_predicate as i64,   // 2
+            s.total_entries as i64,            // 3
+            s.memory_usage_bytes as i64,       // 4
+            s.max_memory_bytes as i64,         // 5
+            s.disk_usage_bytes as i64,         // 6
+            s.max_disk_bytes as i64,           // 7
+            s.memory_arrow_entries as i64,     // 8
+            s.memory_liquid_entries as i64,    // 9
+            s.runtime.disk_evictions as i64,   // 10
+            s.runtime.squeeze_io_saved as i64, // 11
+        ]
+    }
+
+    /// Global stats snapshot, or `None` when the runtime isn't initialized.
+    pub fn stats_for_ffi_globally() -> Option<[i64; LIQUID_CACHE_STAT_FIELDS]> {
+        Self::get().map(|rt| rt.stats_for_ffi())
     }
 
     fn recreate_cache_dir(&self) {
