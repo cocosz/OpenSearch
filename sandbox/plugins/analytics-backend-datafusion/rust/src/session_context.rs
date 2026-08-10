@@ -406,7 +406,7 @@ pub async unsafe fn create_session_context(
         shard_view.sort_fields.len()
     );
 
-    log_debug!(
+    error!(
         "create_session_context: successfully registered table '{}', table_name_len={}",
         table_name,
         table_name.len()

@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::cache::page_index::is_scoped_page_index_enabled;
+use crate::parquet_page_cache::is_scoped_page_index_enabled;
 use datafusion::datasource::physical_plan::parquet::metadata::CachedParquetMetaData;
 use datafusion::execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadataCache, FileMetadataCacheEntry,

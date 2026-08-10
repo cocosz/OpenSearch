@@ -26,7 +26,7 @@
 use tokio::runtime::Handle;
 use tokio_metrics::{RuntimeMonitor, TaskMonitor};
 
-use crate::cache::CustomCacheManager;
+use crate::custom_cache_manager::CustomCacheManager;
 use crate::executor::ConcurrencyGate;
 
 #[repr(C)]
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_pack_cache_stats_empty_manager_zeroed() {
-        use crate::cache::CustomCacheManager;
+        use crate::custom_cache_manager::CustomCacheManager;
         let mgr = CustomCacheManager::new();
         let repr = pack_cache_stats(&mgr);
         for g in [&repr.metadata_cache, &repr.statistics_cache] {
@@ -478,9 +478,9 @@ mod tests {
         use object_store::path::Path;
 
         use crate::cache::MutexFileMetadataCache;
-        use crate::cache::CustomCacheManager;
-        use crate::cache::eviction_policy::PolicyType;
-        use crate::cache::CustomStatisticsCache;
+        use crate::custom_cache_manager::CustomCacheManager;
+        use crate::eviction_policy::PolicyType;
+        use crate::statistics_cache::CustomStatisticsCache;
 
         let metadata_cache = Arc::new(MutexFileMetadataCache::new(DefaultFilesMetadataCache::new(
             50 * 1024 * 1024,

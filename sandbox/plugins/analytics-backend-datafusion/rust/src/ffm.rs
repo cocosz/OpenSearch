@@ -46,11 +46,11 @@ fn timed_block_on<F: std::future::Future>(
 use crate::api;
 use crate::api::DataFusionRuntime;
 use crate::cache;
-use crate::cache::CustomCacheManager;
+use crate::custom_cache_manager::CustomCacheManager;
 use crate::datafusion_query_config::InternalSearch;
-use crate::cache::eviction_policy::CacheEvictionPolicy;
+use crate::eviction_policy::CacheEvictionPolicy;
 use crate::runtime_manager::RuntimeManager;
-use crate::cache::CustomStatisticsCache;
+use crate::statistics_cache::CustomStatisticsCache;
 
 use crate::cache::page_index;
 use datafusion::execution::cache::DefaultFilesMetadataCache;
