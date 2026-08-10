@@ -101,3 +101,26 @@ codegen-units = 16
 incremental = true
 debug = "full"
 strip = false
+
+# Liquid cache carries debug-only invariants (debug_assert!) that assume its own
+# standalone caching lifecycle — e.g. "meta data must be cached already" in
+# reader/plantime/opener.rs, which requires the parquet-metadata Arc to already be
+# shared with LC's own cache. That doesn't hold on the OpenSearch caller-provided
+# metadata path, so it panics in dev builds. Release compiles debug_assert! out;
+# mirror that for these deps so debug builds can run the integration. These are
+# sanity assertions, not error handling, so correctness is unaffected.
+[profile.dev.package.liquid-cache-datafusion]
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.liquid-cache-datafusion-local]
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.liquid-cache]
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.liquid-cache-common]
+debug-assertions = false
+overflow-checks = false

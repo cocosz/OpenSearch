@@ -269,7 +269,7 @@ pub async unsafe fn create_session_context(
     // It wraps ParquetSource with LiquidParquetSource for decoded-batch caching.
     // The LineageOptimizer (logical) is excluded — it adds O(nodes*exprs)
     // planning overhead that causes 2x regression on string-heavy queries.
-    #[cfg(target_os = "linux")]
+    #[cfg(feature = "liquid_cache")]
     if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
         if let Some(ref optimizer) = runtime.liquid_cache_optimizer {
             state_builder = state_builder.with_physical_optimizer_rule(optimizer.clone());

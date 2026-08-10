@@ -193,65 +193,65 @@ pub unsafe extern "C" fn df_close_global_runtime(ptr: i64) {
 
 // ---- Liquid Cache FFM entry points (Linux only — requires io-uring) ----
 
-#[cfg(target_os = "linux")]
+#[cfg(feature = "liquid_cache")]
 #[no_mangle]
 pub unsafe extern "C" fn df_clear_liquid_cache(runtime_ptr: i64) {
     api::clear_liquid_cache(runtime_ptr);
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(feature = "liquid_cache"))]
 #[no_mangle]
 pub unsafe extern "C" fn df_clear_liquid_cache(_runtime_ptr: i64) {}
 
-#[cfg(target_os = "linux")]
+#[cfg(feature = "liquid_cache")]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_enabled(enabled: i64) {
     crate::liquid_cache::LiquidOnlyRuntime::set_enabled_globally(enabled != 0);
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(feature = "liquid_cache"))]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_enabled(_enabled: i64) {}
 
-#[cfg(target_os = "linux")]
+#[cfg(feature = "liquid_cache")]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_memory_limit(bytes: i64) {
     if bytes >= 0 {
         crate::liquid_cache::LiquidOnlyRuntime::set_max_memory_bytes_globally(bytes as usize);
     }
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(feature = "liquid_cache"))]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_memory_limit(_bytes: i64) {}
 
-#[cfg(target_os = "linux")]
+#[cfg(feature = "liquid_cache")]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_disk_limit(bytes: i64) {
     if bytes >= 0 {
         crate::liquid_cache::LiquidOnlyRuntime::set_max_disk_bytes_globally(bytes as usize);
     }
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(feature = "liquid_cache"))]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_disk_limit(_bytes: i64) {}
 
-#[cfg(target_os = "linux")]
+#[cfg(feature = "liquid_cache")]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_selectivity_threshold(permille: i64) {
     if permille >= 0 && permille <= 1000 {
         crate::liquid_cache::set_lc_selectivity_threshold(permille as f64 / 1000.0);
     }
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(feature = "liquid_cache"))]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_selectivity_threshold(_permille: i64) {}
 
-#[cfg(target_os = "linux")]
+#[cfg(feature = "liquid_cache")]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_max_columns(count: i64) {
     if count > 0 {
         crate::liquid_cache::set_lc_max_columns(count as usize);
     }
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(feature = "liquid_cache"))]
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_max_columns(_count: i64) {}
 
@@ -575,7 +575,7 @@ pub unsafe extern "C" fn df_stream_next(stream_ptr: i64) -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn df_stream_close(stream_ptr: i64) {
     api::stream_close(stream_ptr);
-    #[cfg(target_os = "linux")]
+    #[cfg(feature = "liquid_cache")]
     crate::liquid_cache::LiquidOnlyRuntime::log_stats_if_initialized();
 }
 

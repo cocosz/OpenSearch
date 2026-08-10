@@ -240,7 +240,7 @@ fn create_stream_with_access_plan(
     // LC engagement (Linux only — requires io-uring): wrap when ALL projected
     // columns are cacheable (numeric/date/timestamp/boolean) and no predicate
     // column is string. The opener decides per-file whether to STREAM or DELEGATE.
-    #[cfg(target_os = "linux")]
+    #[cfg(feature = "liquid_cache")]
     let use_lc = {
         let lc_globally_enabled = crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally();
         let max_cols = crate::liquid_cache::lc_max_columns();
@@ -280,10 +280,10 @@ fn create_stream_with_access_plan(
         );
         result
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(feature = "liquid_cache"))]
     let use_lc = false;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(feature = "liquid_cache")]
     let config_builder = if use_lc {
         if let Some(cache_ref) = crate::liquid_cache::LiquidOnlyRuntime::cache_ref_globally() {
             let mut source = parquet_source;
@@ -328,7 +328,7 @@ fn create_stream_with_access_plan(
             .with_file(partitioned_file)
     };
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(feature = "liquid_cache"))]
     let config_builder = {
         let _ = use_lc;
         let _ = selectivity;
