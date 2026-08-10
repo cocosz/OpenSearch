@@ -59,5 +59,5 @@ pub mod udaf;
 pub mod udf;
 pub mod udwf;
 
-#[cfg(target_os = "linux")]
+#[cfg(feature = "liquid_cache")]
 pub mod liquid_cache;

@@ -735,4 +735,3 @@ tasks.withType(TestTaskReports).configureEach {
 tasks.named(JavaBasePlugin.CHECK_TASK_NAME) {
   dependsOn tasks.named('testAggregateTestReport', TestReport)
 }
-
