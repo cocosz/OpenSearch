@@ -243,6 +243,8 @@ pub async unsafe fn create_session_context(
             .execution
             .split_file_groups_by_statistics = true;
     }
+    // LC session config is applied only when LC is actually engaged (inside
+    // parquet_bridge.rs), not globally.
 
     let mut state_builder = SessionStateBuilder::new()
         .with_config(config)
@@ -262,6 +264,16 @@ pub async unsafe fn create_session_context(
                 Arc::clone(&shard_view.store),
                 runtime.runtime_env.cache_manager.get_file_metadata_cache(),
             )));
+    }
+    // Only the physical optimizer (LocalModeLiquidCacheOptimizer) is applied.
+    // It wraps ParquetSource with LiquidParquetSource for decoded-batch caching.
+    // The LineageOptimizer (logical) is excluded — it adds O(nodes*exprs)
+    // planning overhead that causes 2x regression on string-heavy queries.
+    #[cfg(feature = "liquid_cache")]
+    if crate::liquid_cache::LiquidOnlyRuntime::is_enabled_globally() {
+        if let Some(ref optimizer) = runtime.liquid_cache_optimizer {
+            state_builder = state_builder.with_physical_optimizer_rule(optimizer.clone());
+        }
     }
 
     let state = state_builder.build();

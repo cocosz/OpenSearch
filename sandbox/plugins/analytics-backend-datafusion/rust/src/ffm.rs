@@ -156,17 +156,128 @@ pub unsafe extern "C" fn df_create_global_runtime(
     spill_dir_ptr: *const u8,
     spill_dir_len: i64,
     spill_limit: i64,
+    liquid_cache_enabled: i64,
+    liquid_cache_size: i64,
+    liquid_cache_max_disk_bytes: i64,
+    liquid_cache_mode_ptr: *const u8,
+    liquid_cache_mode_len: i64,
+    liquid_cache_eviction_policy_ptr: *const u8,
+    liquid_cache_eviction_policy_len: i64,
 ) -> i64 {
     crate::memory_guard::set_pool_limit_for_guard(memory_pool_limit);
     let spill_dir = str_from_raw(spill_dir_ptr, spill_dir_len)
         .map_err(|e| format!("df_create_global_runtime: {}", e))?;
-    api::create_global_runtime(memory_pool_limit, cache_manager_ptr, spill_dir, spill_limit)
+    let liquid_cache_dir = str_from_raw(liquid_cache_mode_ptr, liquid_cache_mode_len)
+        .map_err(|e| format!("df_create_global_runtime: liquid_cache_dir: {}", e))?;
+    let liquid_cache_eviction_policy = str_from_raw(liquid_cache_eviction_policy_ptr, liquid_cache_eviction_policy_len)
+        .map_err(|e| format!("df_create_global_runtime: liquid_cache_eviction_policy: {}", e))?;
+    api::create_global_runtime(
+        memory_pool_limit,
+        cache_manager_ptr,
+        spill_dir,
+        spill_limit,
+        liquid_cache_enabled != 0,
+        liquid_cache_size,
+        liquid_cache_max_disk_bytes,
+        liquid_cache_dir,
+        liquid_cache_eviction_policy,
+        get_rt_manager()?.io_runtime.handle(),
+    )
         .map_err(|e| e.to_string())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn df_close_global_runtime(ptr: i64) {
     api::close_global_runtime(ptr);
+}
+
+// ---- Liquid Cache FFM entry points (Linux only — requires io-uring) ----
+
+#[cfg(feature = "liquid_cache")]
+#[no_mangle]
+pub unsafe extern "C" fn df_clear_liquid_cache(runtime_ptr: i64) {
+    api::clear_liquid_cache(runtime_ptr);
+}
+#[cfg(not(feature = "liquid_cache"))]
+#[no_mangle]
+pub unsafe extern "C" fn df_clear_liquid_cache(_runtime_ptr: i64) {}
+
+#[cfg(feature = "liquid_cache")]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_enabled(enabled: i64) {
+    crate::liquid_cache::LiquidOnlyRuntime::set_enabled_globally(enabled != 0);
+}
+#[cfg(not(feature = "liquid_cache"))]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_enabled(_enabled: i64) {}
+
+#[cfg(feature = "liquid_cache")]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_memory_limit(bytes: i64) {
+    if bytes >= 0 {
+        crate::liquid_cache::LiquidOnlyRuntime::set_max_memory_bytes_globally(bytes as usize);
+    }
+}
+#[cfg(not(feature = "liquid_cache"))]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_memory_limit(_bytes: i64) {}
+
+#[cfg(feature = "liquid_cache")]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_disk_limit(bytes: i64) {
+    if bytes >= 0 {
+        crate::liquid_cache::LiquidOnlyRuntime::set_max_disk_bytes_globally(bytes as usize);
+    }
+}
+#[cfg(not(feature = "liquid_cache"))]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_disk_limit(_bytes: i64) {}
+
+#[cfg(feature = "liquid_cache")]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_selectivity_threshold(permille: i64) {
+    if permille >= 0 && permille <= 1000 {
+        crate::liquid_cache::set_lc_selectivity_threshold(permille as f64 / 1000.0);
+    }
+}
+#[cfg(not(feature = "liquid_cache"))]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_selectivity_threshold(_permille: i64) {}
+
+#[cfg(feature = "liquid_cache")]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_max_columns(count: i64) {
+    if count > 0 {
+        crate::liquid_cache::set_lc_max_columns(count as usize);
+    }
+}
+#[cfg(not(feature = "liquid_cache"))]
+#[no_mangle]
+pub extern "C" fn df_set_liquid_cache_max_columns(_count: i64) {}
+
+/// Writes liquid cache counters into the caller-provided `out_ptr` buffer,
+/// which must hold at least `LIQUID_CACHE_STAT_FIELDS` (12) i64 slots. Returns
+/// the number of fields written, or 0 if the runtime isn't initialized.
+/// Java: MethodHandle(ADDRESS -> JAVA_LONG). Field order is documented on
+/// `LiquidOnlyRuntime::stats_for_ffi`.
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn df_liquid_cache_stats(out_ptr: *mut i64) -> i64 {
+    if out_ptr.is_null() {
+        return 0;
+    }
+    match crate::liquid_cache::LiquidOnlyRuntime::stats_for_ffi_globally() {
+        Some(stats) => {
+            std::ptr::copy_nonoverlapping(stats.as_ptr(), out_ptr, stats.len());
+            stats.len() as i64
+        }
+        None => 0,
+    }
+}
+#[cfg(not(target_os = "linux"))]
+#[no_mangle]
+pub unsafe extern "C" fn df_liquid_cache_stats(_out_ptr: *mut i64) -> i64 {
+    0
 }
 
 // ---- Memory pool observability and dynamic limit ----
@@ -489,6 +600,8 @@ pub unsafe extern "C" fn df_stream_next(stream_ptr: i64) -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn df_stream_close(stream_ptr: i64) {
     api::stream_close(stream_ptr);
+    #[cfg(feature = "liquid_cache")]
+    crate::liquid_cache::LiquidOnlyRuntime::log_stats_if_initialized();
 }
 
 /// Returns execution metrics as JSON bytes for the given stream.

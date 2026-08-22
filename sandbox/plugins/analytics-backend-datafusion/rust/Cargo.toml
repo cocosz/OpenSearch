@@ -95,6 +95,15 @@ crc32fast = { workspace = true }
 # rewrite. STANDARD alphabet matches the OpenSearch `binary` field wire contract.
 base64 = "0.22"
 
+# Liquid Cache for byte-level caching (experimental). Off by default; gated behind
+# the `liquid_cache` cargo feature (enable with -PliquidCache / LIQUID_CACHE=1).
+liquid-cache-datafusion-local = { workspace = true, optional = true }
+liquid-cache-datafusion = { workspace = true, optional = true }
+
+[features]
+# Off by default. When on, the liquid_cache module + FFI + indexed-scan hook engage the process-global cache.
+liquid_cache = ["dep:liquid-cache-datafusion-local", "dep:liquid-cache-datafusion"]
+
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = { workspace = true }

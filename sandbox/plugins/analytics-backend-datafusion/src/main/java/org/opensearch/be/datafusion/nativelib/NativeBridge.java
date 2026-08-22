@@ -143,6 +143,13 @@ public final class NativeBridge {
     private static final MethodHandle SET_SCOPED_PAGE_INDEX_ENABLED;
     private static final MethodHandle CANCEL_QUERY;
     private static final MethodHandle SET_CANCEL_STATS_THRESHOLD_MS;
+    private static final MethodHandle CLEAR_LIQUID_CACHE;
+    private static final MethodHandle SET_LIQUID_CACHE_ENABLED;
+    private static final MethodHandle SET_LIQUID_CACHE_MEMORY_LIMIT;
+    private static final MethodHandle SET_LIQUID_CACHE_DISK_LIMIT;
+    private static final MethodHandle SET_LIQUID_CACHE_SELECTIVITY_THRESHOLD;
+    private static final MethodHandle SET_LIQUID_CACHE_MAX_COLUMNS;
+    private static final MethodHandle LIQUID_CACHE_STATS;
     private static final MethodHandle STATS;
     private static final MethodHandle QUERY_REGISTRY_TOP_N_BY_CURRENT;
     private static final MethodHandle DF_NATIVE_NODE_STATS;
@@ -174,6 +181,13 @@ public final class NativeBridge {
                 ValueLayout.JAVA_LONG,
                 ValueLayout.ADDRESS,
                 ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
                 ValueLayout.JAVA_LONG
             )
         );
@@ -181,6 +195,41 @@ public final class NativeBridge {
         CLOSE_GLOBAL_RUNTIME = linker.downcallHandle(
             lib.find("df_close_global_runtime").orElseThrow(),
             FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        CLEAR_LIQUID_CACHE = linker.downcallHandle(
+            lib.find("df_clear_liquid_cache").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        SET_LIQUID_CACHE_ENABLED = linker.downcallHandle(
+            lib.find("df_set_liquid_cache_enabled").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        SET_LIQUID_CACHE_MEMORY_LIMIT = linker.downcallHandle(
+            lib.find("df_set_liquid_cache_memory_limit").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        SET_LIQUID_CACHE_DISK_LIMIT = linker.downcallHandle(
+            lib.find("df_set_liquid_cache_disk_limit").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        SET_LIQUID_CACHE_SELECTIVITY_THRESHOLD = linker.downcallHandle(
+            lib.find("df_set_liquid_cache_selectivity_threshold").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        SET_LIQUID_CACHE_MAX_COLUMNS = linker.downcallHandle(
+            lib.find("df_set_liquid_cache_max_columns").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
+        );
+
+        LIQUID_CACHE_STATS = linker.downcallHandle(
+            lib.find("df_liquid_cache_stats").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS)
         );
 
         GET_MEMORY_POOL_USAGE = linker.downcallHandle(
@@ -768,16 +817,79 @@ public final class NativeBridge {
      * This pointer is <b>not</b> a MemorySegment — it's a Rust heap address that lives
      * until {@link #closeGlobalRuntime} is called.
      */
-    public static long createGlobalRuntime(long memoryLimit, long cacheManagerPtr, String spillDir, long spillLimit) {
+    public static long createGlobalRuntime(long memoryLimit, long cacheManagerPtr, String spillDir, long spillLimit,
+                                           boolean liquidCacheEnabled, long liquidCacheSize, long liquidCacheMaxDiskBytes,
+                                           String liquidCacheDir, String liquidCacheEvictionPolicy) {
         try (var call = new NativeCall()) {
             var dir = call.str(spillDir);
-            return call.invoke(CREATE_GLOBAL_RUNTIME, memoryLimit, cacheManagerPtr, dir.segment(), dir.len(), spillLimit);
+            var cacheDir = call.str(liquidCacheDir);
+            var eviction = call.str(liquidCacheEvictionPolicy);
+            return call.invoke(CREATE_GLOBAL_RUNTIME, memoryLimit, cacheManagerPtr, dir.segment(), dir.len(), spillLimit,
+                liquidCacheEnabled ? 1L : 0L, liquidCacheSize, liquidCacheMaxDiskBytes,
+                cacheDir.segment(), cacheDir.len(), eviction.segment(), eviction.len());
         }
     }
 
     /** Frees the native runtime. Safe to call once. */
     public static void closeGlobalRuntime(long ptr) {
         NativeCall.invokeVoid(CLOSE_GLOBAL_RUNTIME, ptr);
+    }
+
+    /** Clears all Liquid Cache entries and DataFusion internal caches. */
+    public static void clearLiquidCache(long runtimePtr) {
+        NativeCall.invokeVoid(CLEAR_LIQUID_CACHE, runtimePtr);
+    }
+
+    /** Number of i64 counters returned by {@link #liquidCacheStats()}. Must match the Rust FFI. */
+    public static final int LIQUID_CACHE_STAT_FIELDS = 12;
+
+    /**
+     * Reads Liquid Cache counters in a single FFM call. Field order (see the Rust
+     * {@code LiquidOnlyRuntime::stats_for_ffi}):
+     * [cache_hit, cache_miss, predicate_evals, total_entries, memory_usage_bytes,
+     *  max_memory_bytes, disk_usage_bytes, max_disk_bytes, memory_arrow_entries,
+     *  memory_liquid_entries, disk_evictions, squeeze_io_saved].
+     * Returns all-zeros when the runtime isn't initialized or on error.
+     */
+    public static long[] liquidCacheStats() {
+        long[] out = new long[LIQUID_CACHE_STAT_FIELDS];
+        try (var arena = Arena.ofConfined()) {
+            var buf = arena.allocate(ValueLayout.JAVA_LONG, LIQUID_CACHE_STAT_FIELDS);
+            long n = (long) LIQUID_CACHE_STATS.invokeExact(buf);
+            int count = (int) Math.min(Math.max(n, 0), LIQUID_CACHE_STAT_FIELDS);
+            for (int i = 0; i < count; i++) {
+                out[i] = buf.getAtIndex(ValueLayout.JAVA_LONG, i);
+            }
+            return out;
+        } catch (Throwable t) {
+            logger.debug("Failed to read liquid cache stats", t);
+            return out;
+        }
+    }
+
+    /** Dynamically enable or disable Liquid Cache for new queries. */
+    public static void setLiquidCacheEnabled(boolean enabled) {
+        NativeCall.invokeVoid(SET_LIQUID_CACHE_ENABLED, enabled ? 1L : 0L);
+    }
+
+    /** Dynamically update the Liquid Cache memory limit in bytes. */
+    public static void setLiquidCacheMemoryLimit(long bytes) {
+        NativeCall.invokeVoid(SET_LIQUID_CACHE_MEMORY_LIMIT, bytes);
+    }
+
+    /** Dynamically update the Liquid Cache disk limit in bytes. */
+    public static void setLiquidCacheDiskLimit(long bytes) {
+        NativeCall.invokeVoid(SET_LIQUID_CACHE_DISK_LIMIT, bytes);
+    }
+
+    /** Dynamically update the LC selectivity threshold (permille: 800 = 0.8). */
+    public static void setLiquidCacheSelectivityThreshold(long permille) {
+        NativeCall.invokeVoid(SET_LIQUID_CACHE_SELECTIVITY_THRESHOLD, permille);
+    }
+
+    /** Dynamically update the max columns for LC engagement. */
+    public static void setLiquidCacheMaxColumns(long count) {
+        NativeCall.invokeVoid(SET_LIQUID_CACHE_MAX_COLUMNS, count);
     }
 
     // ---- Memory pool observability and dynamic limit ----

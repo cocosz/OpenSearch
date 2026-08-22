@@ -75,6 +75,10 @@ criterion = { version = "=0.5.1", features = ["async_tokio"] }
 tokio-metrics = { version = "=0.5.0", features = ["rt"] }
 proptest = "=1.4.0"
 
+# Liquid Cache for byte-level caching
+liquid-cache-datafusion-local = { git = "https://github.com/cocosz/liquid-cache", branch = "opensearch-integration", package = "liquid-cache-datafusion-local" }
+liquid-cache-datafusion = { git = "https://github.com/cocosz/liquid-cache", branch = "opensearch-integration", package = "liquid-cache-datafusion" }
+
 # Internal
 native-bridge-common = { path = "common" }
 opensearch-tiered-storage = { path = "../../tiered-storage/src/main/rust" }
