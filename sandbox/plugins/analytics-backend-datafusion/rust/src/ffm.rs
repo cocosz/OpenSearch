@@ -255,6 +255,31 @@ pub extern "C" fn df_set_liquid_cache_max_columns(count: i64) {
 #[no_mangle]
 pub extern "C" fn df_set_liquid_cache_max_columns(_count: i64) {}
 
+/// Writes liquid cache counters into the caller-provided `out_ptr` buffer,
+/// which must hold at least `LIQUID_CACHE_STAT_FIELDS` (12) i64 slots. Returns
+/// the number of fields written, or 0 if the runtime isn't initialized.
+/// Java: MethodHandle(ADDRESS -> JAVA_LONG). Field order is documented on
+/// `LiquidOnlyRuntime::stats_for_ffi`.
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn df_liquid_cache_stats(out_ptr: *mut i64) -> i64 {
+    if out_ptr.is_null() {
+        return 0;
+    }
+    match crate::liquid_cache::LiquidOnlyRuntime::stats_for_ffi_globally() {
+        Some(stats) => {
+            std::ptr::copy_nonoverlapping(stats.as_ptr(), out_ptr, stats.len());
+            stats.len() as i64
+        }
+        None => 0,
+    }
+}
+#[cfg(not(target_os = "linux"))]
+#[no_mangle]
+pub unsafe extern "C" fn df_liquid_cache_stats(_out_ptr: *mut i64) -> i64 {
+    0
+}
+
 // ---- Memory pool observability and dynamic limit ----
 
 /// Returns current memory pool usage in bytes.
